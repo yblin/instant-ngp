@@ -41,13 +41,6 @@ int main_func(const std::vector<std::string>& arguments) {
 		{'h', "help"},
 	};
 
-	ValueFlag<string> mode_flag{
-		parser,
-		"MODE",
-		"Deprecated. Do not use.",
-		{'m', "mode"},
-	};
-
 	ValueFlag<string> network_config_flag{
 		parser,
 		"CONFIG",
@@ -143,10 +136,6 @@ int main_func(const std::vector<std::string>& arguments) {
 	if (version_flag) {
 		tlog::none() << "Instant Neural Graphics Primitives v" NGP_VERSION;
 		return 0;
-	}
-
-	if (mode_flag) {
-		tlog::warning() << "The '--mode' argument is no longer in use. It has no effect. The mode is automatically chosen based on the scene.";
 	}
 
 	Testbed testbed;
