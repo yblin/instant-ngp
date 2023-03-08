@@ -2704,13 +2704,17 @@ void Testbed::prepare_next_camera_path_frame() {
 	}
 }
 
+/**
+ * Main function.
+ */
 void Testbed::train_and_render(bool skip_rendering) {
 	if (m_train) {
 		train(m_training_batch_size);
 	}
 
-	// If we don't have a trainer, as can happen when having loaded training data or changed modes without having
-	// explicitly loaded a new neural network.
+    // If we don't have a trainer, as can happen when having loaded training
+    // data or changed modes without having explicitly loaded a new neural
+    // network.
 	if (m_testbed_mode != ETestbedMode::None && !m_network) {
 		reload_network_from_file();
 		if (!m_network) {
@@ -2722,8 +2726,8 @@ void Testbed::train_and_render(bool skip_rendering) {
 		optimise_mesh_step(1);
 	}
 
-	// Don't do any smoothing here if a camera path is being rendered. It'll take care
-	// of the smoothing on its own.
+    // Don't do any smoothing here if a camera path is being rendered.
+    // It'll take care of the smoothing on its own.
 	float frame_ms = m_camera_path.rendering ? 0.0f : m_frame_ms.val();
 	apply_camera_smoothing(frame_ms);
 
@@ -2733,7 +2737,8 @@ void Testbed::train_and_render(bool skip_rendering) {
 
 	auto start = std::chrono::steady_clock::now();
 	ScopeGuard timing_guard{[&]() {
-		m_render_ms.update(std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now()-start).count());
+        m_render_ms.update(std::chrono::duration<float, std::milli>(
+                           std::chrono::steady_clock::now() - start).count());
 	}};
 
 	if (norm(m_smoothed_camera - m_camera) < 0.001f) {
@@ -2766,8 +2771,13 @@ void Testbed::train_and_render(bool skip_rendering) {
 
 		view.camera0 = m_smoothed_camera;
 
-		// Motion blur over the fraction of time that the shutter is open. Interpolate in log-space to preserve rotations.
-		view.camera1 = m_camera_path.rendering ? camera_lerp(m_smoothed_camera, m_camera_path.render_frame_end_camera, m_camera_path.render_settings.shutter_fraction) : view.camera0;
+        // Motion blur over the fraction of time that the shutter is open.
+        // Interpolate in log-space to preserve rotations.
+        view.camera1 = m_camera_path.rendering ?
+                    camera_lerp(m_smoothed_camera,
+                                m_camera_path.render_frame_end_camera,
+                                m_camera_path.render_settings.shutter_fraction)
+                  : view.camera0;
 
 		view.visualized_dimension = m_visualized_dimension;
 		view.relative_focal_length = m_relative_focal_length;
@@ -2776,9 +2786,10 @@ void Testbed::train_and_render(bool skip_rendering) {
 		view.foveation = {};
 		view.device = &primary_device();
 	} else {
-		int n_views = n_dimensions_to_visualize()+1;
+        int n_views = n_dimensions_to_visualize() + 1;
 
-		float d = std::sqrt((float)m_window_res.x * (float)m_window_res.y / (float)n_views);
+        float d = std::sqrt((float)m_window_res.x *
+                            (float)m_window_res.y / (float)n_views);
 
 		int nx = (int)std::ceil((float)m_window_res.x / d);
 		int ny = (int)std::ceil((float)n_views / (float)nx);
@@ -2816,11 +2827,12 @@ void Testbed::train_and_render(bool skip_rendering) {
 		}
 	}
 
-	// Update dynamic res and DLSS
+    // Update dynamic res and DLSS.
 	{
-		// Don't count the time being spent allocating buffers and resetting DLSS as part of the frame time.
-		// Otherwise the dynamic resolution calculations for following frames will be thrown out of whack
-		// and may even start oscillating.
+        // Don't count the time being spent allocating buffers and resetting
+        // DLSS as part of the frame time.
+        // Otherwise the dynamic resolution calculations for following frames
+        // will be thrown out of whack and may even start oscillating.
 		auto skip_start = std::chrono::steady_clock::now();
 		ScopeGuard skip_timing_guard{[&]() {
 			start += std::chrono::steady_clock::now() - skip_start;
@@ -2832,10 +2844,10 @@ void Testbed::train_and_render(bool skip_rendering) {
 			n_pixels_full_res += compMul(view.full_resolution);
 		}
 
-		float pixel_ratio = (n_pixels == 0 || (m_train && m_training_step == 0)) ? (1.0f / 256.0f) : ((float)n_pixels / (float)n_pixels_full_res);
+        float pixel_ratio = (n_pixels == 0 || (m_train && m_training_step == 0)) ? (1.0f / 256.0f) : ((float)n_pixels / (float)n_pixels_full_res);
 
 		float last_factor = std::sqrt(pixel_ratio);
-		float factor = std::sqrt(pixel_ratio / m_render_ms.val() * 1000.0f / m_dynamic_res_target_fps);
+        float factor = std::sqrt(pixel_ratio / m_render_ms.val() * 1000.0f / m_dynamic_res_target_fps);
 		if (!m_dynamic_res) {
 			factor = 8.f / (float)m_fixed_res_factor;
 		}
@@ -2844,26 +2856,26 @@ void Testbed::train_and_render(bool skip_rendering) {
 
 		for (auto&& view : m_views) {
 			if (m_dlss) {
-				view.render_buffer->enable_dlss(*m_dlss_provider, view.full_resolution);
+                view.render_buffer->enable_dlss(*m_dlss_provider, view.full_resolution);
 			} else {
 				view.render_buffer->disable_dlss();
 			}
 
 			ivec2 render_res = view.render_buffer->in_resolution();
-			ivec2 new_render_res = clamp(ivec2(vec2(view.full_resolution) * factor), view.full_resolution / 16, view.full_resolution);
+            ivec2 new_render_res = clamp(ivec2(vec2(view.full_resolution) * factor), view.full_resolution / 16, view.full_resolution);
 
 			if (m_camera_path.rendering) {
 				new_render_res = m_camera_path.render_settings.resolution;
 			}
 
-			float ratio = std::sqrt((float)compMul(render_res) / (float)compMul(new_render_res));
-			if (ratio > 1.2f || ratio < 0.8f || factor == 1.0f || !m_dynamic_res || m_camera_path.rendering) {
+            float ratio = std::sqrt((float)compMul(render_res) / (float)compMul(new_render_res));
+            if (ratio > 1.2f || ratio < 0.8f || factor == 1.0f || !m_dynamic_res || m_camera_path.rendering) {
 				render_res = new_render_res;
 			}
 
 			if (view.render_buffer->dlss()) {
-				render_res = view.render_buffer->dlss()->clamp_resolution(render_res);
-				view.render_buffer->dlss()->update_feature(render_res, view.render_buffer->dlss()->is_hdr(), view.render_buffer->dlss()->sharpen());
+                render_res = view.render_buffer->dlss()->clamp_resolution(render_res);
+                view.render_buffer->dlss()->update_feature(render_res, view.render_buffer->dlss()->is_hdr(), view.render_buffer->dlss()->sharpen());
 			}
 
 			view.render_buffer->resize(render_res);
@@ -2936,11 +2948,11 @@ void Testbed::train_and_render(bool skip_rendering) {
 		ivec2 res(m_picture_in_picture_res, m_picture_in_picture_res * 9/16);
 		m_pip_render_buffer->resize(res);
 		if (m_pip_render_buffer->spp() < 8) {
-			// a bit gross, but let's copy the keyframe's state into the global state in order to not have to plumb through the fov etc to render_frame.
+            // A bit gross, but let's copy the keyframe's state into the global state in order to not have to plumb through the fov etc to render_frame.
 			CameraKeyframe backup = copy_camera_to_keyframe();
 			CameraKeyframe pip_kf = m_camera_path.eval_camera_path(m_camera_path.play_time);
 			set_camera_from_keyframe(pip_kf);
-			render_frame(m_stream.get(), pip_kf.m(), pip_kf.m(), pip_kf.m(), m_screen_center, m_relative_focal_length, vec4(0.0f), {}, {}, m_visualized_dimension, *m_pip_render_buffer);
+            render_frame(m_stream.get(), pip_kf.m(), pip_kf.m(), pip_kf.m(), m_screen_center, m_relative_focal_length, vec4(0.0f), {}, {}, m_visualized_dimension, *m_pip_render_buffer);
 			set_camera_from_keyframe(backup);
 
 			m_pip_render_texture->blit_from_cuda_mapping();
@@ -2950,7 +2962,6 @@ void Testbed::train_and_render(bool skip_rendering) {
 
 	CUDA_CHECK_THROW(cudaStreamSynchronize(m_stream.get()));
 }
-
 
 #ifdef NGP_GUI
 void Testbed::create_second_window() {
@@ -2990,8 +3001,10 @@ void Testbed::create_second_window() {
 		vs = compile_shader(false, copy_shader_vert);
 		ps = compile_shader(true, copy_shader_frag);
 	}
-	m_second_window.window = glfwCreateWindow(win_w, win_h, "Fullscreen Output", NULL, m_glfw_window);
-	if (win_x!=0x40000000) glfwSetWindowPos(m_second_window.window, win_x, win_y);
+    m_second_window.window = glfwCreateWindow(win_w, win_h, "Fullscreen Output",
+                                              NULL, m_glfw_window);
+    if (win_x!=0x40000000) glfwSetWindowPos(m_second_window.window, win_x,
+                                            win_y);
 	glfwMakeContextCurrent(m_second_window.window);
 	m_second_window.program = glCreateProgram();
 	glAttachShader(m_second_window.program, vs);
@@ -3014,8 +3027,10 @@ void Testbed::create_second_window() {
 		-1.0f, -1.0f
 	};
 	glBindBuffer(GL_ARRAY_BUFFER, m_second_window.vbo);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(fsquadVerts), fsquadVerts, GL_STATIC_DRAW);
-	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void *)0);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(fsquadVerts), fsquadVerts,
+                 GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float),
+                          (void *)0);
 	glEnableVertexAttribArray(0);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 	glBindVertexArray(0);
@@ -3320,6 +3335,9 @@ void Testbed::update_vr_performance_settings() {
 #endif //NGP_GUI
 }
 
+/**
+ * Main function.
+ */
 bool Testbed::frame() {
 #ifdef NGP_GUI
 	if (m_render_window) {
@@ -3332,15 +3350,19 @@ bool Testbed::frame() {
 	}
 #endif
 
-	// Render against the trained neural network. If we're training and already close to convergence,
-	// we can skip rendering if the scene camera doesn't change
-	uint32_t n_to_skip = m_train ? tcnn::clamp(m_training_step / 16u, 15u, 255u) : 0;
+    // Render against the trained neural network. If we're training and already
+    // close to convergence, we can skip rendering if the scene camera doesn't
+    // change.
+    uint32_t n_to_skip = m_train ? tcnn::clamp(m_training_step / 16u, 15u, 255u)
+                                 : 0;
 	if (m_render_skip_due_to_lack_of_camera_movement_counter > n_to_skip) {
 		m_render_skip_due_to_lack_of_camera_movement_counter = 0;
 	}
-	bool skip_rendering = m_render_skip_due_to_lack_of_camera_movement_counter++ != 0;
+    bool skip_rendering =
+            m_render_skip_due_to_lack_of_camera_movement_counter++ != 0;
 
-	if (!m_dlss && m_max_spp > 0 && !m_views.empty() && m_views.front().render_buffer->spp() >= m_max_spp) {
+    if (!m_dlss && m_max_spp > 0 && !m_views.empty() &&
+        m_views.front().render_buffer->spp() >= m_max_spp) {
 		skip_rendering = true;
 		if (!m_train) {
 			std::this_thread::sleep_for(1ms);
@@ -3358,7 +3380,8 @@ bool Testbed::frame() {
 	}
 #endif
 
-	if (!skip_rendering || (std::chrono::steady_clock::now() - m_last_gui_draw_time_point) > 25ms) {
+    if (!skip_rendering || (std::chrono::steady_clock::now() -
+                            m_last_gui_draw_time_point) > 25ms) {
 		redraw_gui_next_frame();
 	}
 
@@ -3368,10 +3391,15 @@ bool Testbed::frame() {
 		}
 	} catch (SharedQueueEmptyException&) {}
 
+    //--------------------------------------------------------------------------
+    // Main function!!
+    //--------------------------------------------------------------------------
+    train_and_render(skip_rendering);
+    //--------------------------------------------------------------------------
 
-	train_and_render(skip_rendering);
-	if (m_testbed_mode == ETestbedMode::Sdf && m_sdf.calculate_iou_online) {
-		m_sdf.iou = calculate_iou(m_train ? 64*64*64 : 128*128*128, m_sdf.iou_decay, false, true);
+    if (m_testbed_mode == ETestbedMode::Sdf && m_sdf.calculate_iou_online) {
+        m_sdf.iou = calculate_iou(m_train ? 64 * 64 * 64 : 128 * 128 * 128,
+                                  m_sdf.iou_decay, false, true);
 		m_sdf.iou_decay = 0.f;
 	}
 
@@ -3392,11 +3420,13 @@ bool Testbed::frame() {
 	}
 
 	if (m_hmd && m_vr_frame_info) {
-		// If HMD is visible to the user, splat rendered images to the HMD
+        // If HMD is visible to the user, splat rendered images to the HMD.
 		if (m_hmd->is_visible()) {
-			size_t n_views = std::min(m_views.size(), m_vr_frame_info->views.size());
+            size_t n_views = std::min(m_views.size(),
+                                      m_vr_frame_info->views.size());
 
-			// Blit textures to the OpenXR-owned framebuffers (each corresponding to one eye)
+            // Blit textures to the OpenXR-owned framebuffers (each
+            // corresponding to one eye).
 			for (size_t i = 0; i < n_views; ++i) {
 				const auto& vr_view = m_vr_frame_info->views.at(i);
 
@@ -3405,16 +3435,24 @@ bool Testbed::frame() {
 					vr_view.view.subImage.imageRect.extent.height,
 				};
 
-				blit_texture(m_views.at(i).foveation, m_rgba_render_textures.at(i)->texture(), GL_LINEAR, m_depth_render_textures.at(i)->texture(), vr_view.framebuffer, ivec2(0), resolution);
+                blit_texture(m_views.at(i).foveation,
+                             m_rgba_render_textures.at(i)->texture(),
+                             GL_LINEAR,
+                             m_depth_render_textures.at(i)->texture(),
+                             vr_view.framebuffer,
+                             ivec2(0),
+                             resolution);
 			}
 
 			glFinish();
 		}
 
-		// Far and near planes are intentionally reversed, because we map depth inversely
-		// to z. I.e. a window-space depth of 1 refers to the near plane and a depth of 0
-		// to the far plane. This results in much better numeric precision.
-		m_hmd->end_frame(m_vr_frame_info, m_ndc_zfar / m_scale, m_ndc_znear / m_scale, m_vr_use_depth_reproject);
+        // Far and near planes are intentionally reversed, because we map depth
+        // inversely to z. I.e. a window-space depth of 1 refers to the near
+        // plane and a depth of 0 to the far plane.
+        // This results in much better numeric precision.
+        m_hmd->end_frame(m_vr_frame_info, m_ndc_zfar / m_scale,
+                         m_ndc_znear / m_scale, m_vr_use_depth_reproject);
 	}
 #endif
 
@@ -4246,21 +4284,19 @@ __global__ void vr_overlay_hands_kernel(
 	surf2Dwrite(to_float4(color), surface, x * sizeof(float4), y);
 }
 
-void Testbed::render_frame(
-	cudaStream_t stream,
-	const mat4x3& camera_matrix0,
-	const mat4x3& camera_matrix1,
-	const mat4x3& prev_camera_matrix,
-	const vec2& orig_screen_center,
-	const vec2& relative_focal_length,
-	const vec4& nerf_rolling_shutter,
-	const Foveation& foveation,
-	const Foveation& prev_foveation,
-	int visualized_dimension,
-	CudaRenderBuffer& render_buffer,
-	bool to_srgb,
-	CudaDevice* device
-) {
+void Testbed::render_frame(cudaStream_t stream,
+                           const mat4x3& camera_matrix0,
+                           const mat4x3& camera_matrix1,
+                           const mat4x3& prev_camera_matrix,
+                           const vec2& orig_screen_center,
+                           const vec2& relative_focal_length,
+                           const vec4& nerf_rolling_shutter,
+                           const Foveation& foveation,
+                           const Foveation& prev_foveation,
+                           int visualized_dimension,
+                           CudaRenderBuffer& render_buffer,
+                           bool to_srgb,
+                           CudaDevice* device) {
 	if (!device) {
 		device = &primary_device();
 	}

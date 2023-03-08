@@ -51,7 +51,8 @@ int main_func(const std::vector<std::string>& arguments) {
 	Flag no_gui_flag{
 		parser,
 		"NO_GUI",
-		"Disables the GUI and instead reports training progress on the command line.",
+        "Disables the GUI and instead reports training progress on the command "
+        "line.",
 		{"no-gui"},
 	};
 
@@ -72,7 +73,8 @@ int main_func(const std::vector<std::string>& arguments) {
 	ValueFlag<string> scene_flag{
 		parser,
 		"SCENE",
-		"The scene to load. Can be NeRF dataset, a *.obj/*.stl mesh for training a SDF, an image, or a *.nvdb volume.",
+        "The scene to load. Can be NeRF dataset, a *.obj/*.stl mesh for "
+        "training a SDF, an image, or a *.nvdb volume.",
 		{'s', "scene"},
 	};
 
@@ -107,7 +109,8 @@ int main_func(const std::vector<std::string>& arguments) {
 	PositionalList<string> files{
 		parser,
 		"files",
-		"Files to be loaded. Can be a scene, network config, snapshot, camera path, or a combination of those.",
+        "Files to be loaded. Can be a scene, network config, snapshot, camera "
+        "path, or a combination of those.",
 	};
 
 	// Parse command line arguments and react to parsing
@@ -163,7 +166,8 @@ int main_func(const std::vector<std::string>& arguments) {
 #endif
 
 	if (gui) {
-		testbed.init_window(width_flag ? get(width_flag) : 1920, height_flag ? get(height_flag) : 1080);
+        testbed.init_window(width_flag ? get(width_flag) : 1920,
+                            height_flag ? get(height_flag) : 1080);
 	}
 
 	if (vr_flag) {
@@ -173,7 +177,8 @@ int main_func(const std::vector<std::string>& arguments) {
 	// Render/training loop
 	while (testbed.frame()) {
 		if (!gui) {
-			tlog::info() << "iteration=" << testbed.m_training_step << " loss=" << testbed.m_loss_scalar.val();
+            tlog::info() << "iteration=" << testbed.m_training_step << " loss="
+                         << testbed.m_loss_scalar.val();
 		}
 	}
 
