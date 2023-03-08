@@ -170,10 +170,6 @@ int main_func(const std::vector<std::string>& arguments) {
                             height_flag ? get(height_flag) : 1080);
 	}
 
-	if (vr_flag) {
-		testbed.init_vr();
-	}
-
 	// Render/training loop
 	while (testbed.frame()) {
 		if (!gui) {
