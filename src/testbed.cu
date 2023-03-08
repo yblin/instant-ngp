@@ -363,16 +363,16 @@ void Testbed::load_file(const fs::path& path) {
 	}
 }
 
-void Testbed::reset_accumulation(bool due_to_camera_movement, bool immediate_redraw) {
+void Testbed::reset_accumulation(bool due_to_camera_movement,
+                                 bool immediate_redraw) {
 	if (immediate_redraw) {
 		redraw_next_frame();
 	}
 
 	if (!due_to_camera_movement || !reprojection_available()) {
 		m_windowless_render_surface.reset_accumulation();
-        for (auto& view : m_views) {
-            view.render_buffer->reset_accumulation();
-        }
+        if (m_view.render_buffer.get())
+            m_view.render_buffer->reset_accumulation();
     }
 }
 
@@ -669,8 +669,7 @@ void Testbed::imgui() {
 				m_bounding_radius,
 				!m_nerf.training.dataset.xforms.empty() ? m_nerf.training.dataset.xforms[0].start : mat4x3(1.0f),
 				m_nerf.glow_mode,
-				m_nerf.glow_y_cutoff
-			)) {
+                m_nerf.glow_y_cutoff)) {
 				if (!m_camera_path.rendering) {
 					reset_accumulation(true);
 
@@ -739,7 +738,8 @@ void Testbed::imgui() {
 
 				auto elapsed = std::chrono::steady_clock::now() - m_camera_path.render_start_time;
 
-                uint32_t progress = m_camera_path.render_frame_idx * m_camera_path.render_settings.spp + m_views.front().render_buffer->spp();
+                uint32_t progress = m_camera_path.render_frame_idx * m_camera_path.render_settings.spp +
+                                    m_view.render_buffer->spp();
 				uint32_t goal = m_camera_path.render_settings.n_frames() * m_camera_path.render_settings.spp;
 				auto est_remaining = elapsed * (float)(goal - progress) / std::max(progress, 1u);
 
@@ -1041,7 +1041,7 @@ void Testbed::imgui() {
         ImGui::Checkbox("Render", &m_render);
 		ImGui::SameLine();
 
-        const auto& render_buffer = m_views.front().render_buffer;
+        const auto& render_buffer = m_view.render_buffer;
 		std::string spp_string = m_dlss ? std::string{""} : fmt::format("({} spp)", std::max(render_buffer->spp(), 1u));
 		ImGui::Text(": %.01fms for %dx%d %s", m_render_ms.ema_val(), render_buffer->in_resolution().x, render_buffer->in_resolution().y, spp_string.c_str());
 
@@ -1955,7 +1955,7 @@ void Testbed::mouse_wheel() {
 	// When in image mode, zoom around the hovered point.
 	if (m_testbed_mode == ETestbedMode::Image) {
 		ivec2 mouse = {ImGui::GetMousePos().x, ImGui::GetMousePos().y};
-        vec3 offset = get_3d_pos_from_pixel(*m_views.front().render_buffer, mouse) - look_at();
+        vec3 offset = get_3d_pos_from_pixel(*m_view.render_buffer, mouse) - look_at();
 
 		// Don't center around infinitely distant points.
 		if (length(offset) < 256.0f) {
@@ -1984,7 +1984,7 @@ void Testbed::mouse_drag() {
 	// Left held
 	if (ImGui::GetIO().MouseDown[0]) {
 		if (shift) {
-            m_autofocus_target = get_3d_pos_from_pixel(*m_views.front().render_buffer, mouse);
+            m_autofocus_target = get_3d_pos_from_pixel(*m_view.render_buffer, mouse);
 			m_autofocus = true;
 
 			reset_accumulation();
@@ -2020,7 +2020,7 @@ void Testbed::mouse_drag() {
 
 	// Middle pressed
 	if (ImGui::GetIO().MouseClicked[2]) {
-        m_drag_depth = get_depth_from_renderbuffer(*m_views.front().render_buffer, vec2(mouse) / vec2(m_window_res));
+        m_drag_depth = get_depth_from_renderbuffer(*m_view.render_buffer, vec2(mouse) / vec2(m_window_res));
 	}
 
 	// Middle held
@@ -2287,12 +2287,12 @@ void Testbed::draw_gui() {
 
     ivec2 extent = ivec2(display_w, display_h);
 
-    auto& view = m_views.front();
+    auto& view = m_view;
     ivec2 top_left{0, display_h - extent.y};
     blit_texture(m_foveated_rendering_visualize ? Foveation{} : view.foveation,
                  m_rgba_render_texture->texture(),
                  m_foveated_rendering ? GL_LINEAR : GL_NEAREST,
-                 m_depth_render_textures.at(0)->texture(),
+                 m_depth_render_texture->texture(),
                  0,
                  top_left,
                  extent);
@@ -2312,16 +2312,15 @@ void Testbed::draw_gui() {
 	};
 
     // Visualizations are only meaningful when rendering a single view
-    if (m_views.size() == 1) {
-        if (m_mesh.verts.size() != 0 && m_mesh.indices.size() != 0 && m_mesh_render_mode != EMeshRenderMode::Off) {
-            list->AddCallback([](const ImDrawList*, const ImDrawCmd* cmd) {
-                (*(decltype(draw_mesh)*)cmd->UserCallbackData)();
-            }, &draw_mesh);
-            list->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
-        }
-
-        draw_visualizations(list, m_smoothed_camera);
+    if (m_mesh.verts.size() != 0 && m_mesh.indices.size() != 0 &&
+        m_mesh_render_mode != EMeshRenderMode::Off) {
+        list->AddCallback([](const ImDrawList*, const ImDrawCmd* cmd) {
+            (*(decltype(draw_mesh)*)cmd->UserCallbackData)();
+        }, &draw_mesh);
+        list->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
     }
+
+    draw_visualizations(list, m_smoothed_camera);
 
 	if (m_render_ground_truth) {
 		list->AddText(ImVec2(4.f, 4.f), 0xffffffff, "Ground Truth");
@@ -2369,10 +2368,10 @@ void Testbed::prepare_next_camera_path_frame() {
 		return;
 	}
 
-	// If we're rendering a video, we'd like to accumulate multiple spp
-	// for motion blur. Hence dump the frame once the target spp has been reached
+    // If we're rendering a video, we'd like to accumulate multiple spp for
+    // motion blur. Hence dump the frame once the target spp has been reached
 	// and only reset _then_.
-    if (m_views.front().render_buffer->spp() == m_camera_path.render_settings.spp) {
+    if (m_view.render_buffer->spp() == m_camera_path.render_settings.spp) {
 		auto tmp_dir = fs::path{"tmp"};
 		if (!tmp_dir.exists()) {
 			if (!fs::create_directory(tmp_dir)) {
@@ -2382,7 +2381,7 @@ void Testbed::prepare_next_camera_path_frame() {
 			}
 		}
 
-        ivec2 res = m_views.front().render_buffer->out_resolution();
+        ivec2 res = m_view.render_buffer->out_resolution();
 		const dim3 threads = { 16, 8, 1 };
 		const dim3 blocks = { div_round_up((uint32_t)res.x, threads.x), div_round_up((uint32_t)res.y, threads.y), 1 };
 
@@ -2390,7 +2389,7 @@ void Testbed::prepare_next_camera_path_frame() {
 		to_8bit_color_kernel<<<blocks, threads>>>(
 			res,
 			EColorSpace::SRGB, // the GUI always renders in SRGB
-            m_views.front().render_buffer->surface(),
+            m_view.render_buffer->surface(),
 			image_data.data()
 		);
 
@@ -2464,7 +2463,7 @@ void Testbed::prepare_next_camera_path_frame() {
 	const auto& rs = m_camera_path.render_settings;
 	m_camera_path.play_time = (float)((double)m_camera_path.render_frame_idx / (double)rs.n_frames());
 
-    if (m_views.front().render_buffer->spp() == 0) {
+    if (m_view.render_buffer->spp() == 0) {
 		set_camera_from_time(m_camera_path.play_time);
 		apply_camera_smoothing(rs.frame_milliseconds());
 
@@ -2532,29 +2531,23 @@ void Testbed::train_and_render(bool skip_rendering) {
     }
 
 #ifdef NGP_GUI
-    if (1) {
-        set_n_views(1);
-        auto& view = m_views.front();
+    m_view.full_resolution = m_window_res;
+    m_view.camera0 = m_smoothed_camera;
 
-        view.full_resolution = m_window_res;
+    // Motion blur over the fraction of time that the shutter is open.
+    // Interpolate in log-space to preserve rotations.
+    m_view.camera1 = m_camera_path.rendering ?
+                camera_lerp(m_smoothed_camera,
+                            m_camera_path.render_frame_end_camera,
+                            m_camera_path.render_settings.shutter_fraction)
+              : m_view.camera0;
 
-        view.camera0 = m_smoothed_camera;
-
-        // Motion blur over the fraction of time that the shutter is open.
-        // Interpolate in log-space to preserve rotations.
-        view.camera1 = m_camera_path.rendering ?
-                    camera_lerp(m_smoothed_camera,
-                                m_camera_path.render_frame_end_camera,
-                                m_camera_path.render_settings.shutter_fraction)
-                  : view.camera0;
-
-        view.visualized_dimension = m_visualized_dimension;
-        view.relative_focal_length = m_relative_focal_length;
-        view.screen_center = m_screen_center;
-        view.render_buffer->set_hidden_area_mask(nullptr);
-        view.foveation = {};
-        view.device = &primary_device();
-    }
+    m_view.visualized_dimension = m_visualized_dimension;
+    m_view.relative_focal_length = m_relative_focal_length;
+    m_view.screen_center = m_screen_center;
+    m_view.render_buffer->set_hidden_area_mask(nullptr);
+    m_view.foveation = {};
+    m_view.device = &primary_device();
 
     if (m_dlss) {
         m_aperture_size = 0.0f;
@@ -2574,149 +2567,129 @@ void Testbed::train_and_render(bool skip_rendering) {
             start += std::chrono::steady_clock::now() - skip_start;
         }};
 
-        size_t n_pixels = 0, n_pixels_full_res = 0;
-        for (const auto& view : m_views) {
-            n_pixels += compMul(view.render_buffer->in_resolution());
-            n_pixels_full_res += compMul(view.full_resolution);
-        }
+        size_t n_pixels = compMul(m_view.render_buffer->in_resolution());
+        size_t n_pixels_full_res = compMul(m_view.full_resolution);
 
         float pixel_ratio = (n_pixels == 0 || (m_train && m_training_step == 0)) ? (1.0f / 256.0f) : ((float)n_pixels / (float)n_pixels_full_res);
 
         float last_factor = std::sqrt(pixel_ratio);
-        float factor = std::sqrt(pixel_ratio / m_render_ms.val() * 1000.0f / m_dynamic_res_target_fps);
+        float factor = std::sqrt(pixel_ratio / m_render_ms.val() * 1000.0f /
+                                 m_dynamic_res_target_fps);
         if (!m_dynamic_res) {
             factor = 8.f / (float)m_fixed_res_factor;
         }
 
         factor = tcnn::clamp(factor, 1.0f / 16.0f, 1.0f);
 
-        for (auto&& view : m_views) {
-            if (m_dlss) {
-                view.render_buffer->enable_dlss(*m_dlss_provider, view.full_resolution);
+        if (m_dlss) {
+            m_view.render_buffer->enable_dlss(*m_dlss_provider,
+                                              m_view.full_resolution);
+        } else {
+            m_view.render_buffer->disable_dlss();
+        }
+
+        ivec2 render_res = m_view.render_buffer->in_resolution();
+        ivec2 new_render_res = clamp(ivec2(vec2(m_view.full_resolution) * factor),
+                                     m_view.full_resolution / 16,
+                                     m_view.full_resolution);
+
+        if (m_camera_path.rendering) {
+            new_render_res = m_camera_path.render_settings.resolution;
+        }
+
+        float ratio = std::sqrt((float)compMul(render_res) / (float)compMul(new_render_res));
+        if (ratio > 1.2f || ratio < 0.8f || factor == 1.0f || !m_dynamic_res || m_camera_path.rendering) {
+            render_res = new_render_res;
+        }
+
+        if (m_view.render_buffer->dlss()) {
+            render_res = m_view.render_buffer->dlss()->clamp_resolution(render_res);
+            m_view.render_buffer->dlss()->update_feature(render_res,
+                                                         m_view.render_buffer->dlss()->is_hdr(),
+                                                         m_view.render_buffer->dlss()->sharpen());
+        }
+
+        m_view.render_buffer->resize(render_res);
+
+        if (m_foveated_rendering) {
+            if (m_dynamic_foveated_rendering) {
+                vec2 resolution_scale = vec2(render_res) / vec2(m_view.full_resolution);
+
+                // Only start foveation when DLSS if off or if DLSS is asked to do more than 1.5x upscaling.
+                // The reason for the 1.5x threshold is that DLSS can do up to 3x upscaling, at which point a foveation
+                // factor of 2x = 3.0x/1.5x corresponds exactly to bilinear super sampling, which is helpful in
+                // suppressing DLSS's artifacts.
+                float foveation_begin_factor = m_dlss ? 1.5f : 1.0f;
+
+                resolution_scale = clamp(resolution_scale * foveation_begin_factor, vec2(1.0f / m_foveated_rendering_max_scaling), vec2(1.0f));
+                m_view.foveation = {resolution_scale,
+                                    vec2(1.0f) - m_view.screen_center,
+                                    vec2(m_foveated_rendering_full_res_diameter * 0.5f)};
+
+                m_foveated_rendering_scaling = 2.0f / compAdd(resolution_scale);
             } else {
-                view.render_buffer->disable_dlss();
+                m_view.foveation = {vec2(1.0f / m_foveated_rendering_scaling),
+                                    vec2(1.0f) - m_view.screen_center,
+                                    vec2(m_foveated_rendering_full_res_diameter * 0.5f)};
             }
-
-            ivec2 render_res = view.render_buffer->in_resolution();
-            ivec2 new_render_res = clamp(ivec2(vec2(view.full_resolution) * factor), view.full_resolution / 16, view.full_resolution);
-
-            if (m_camera_path.rendering) {
-                new_render_res = m_camera_path.render_settings.resolution;
-            }
-
-            float ratio = std::sqrt((float)compMul(render_res) / (float)compMul(new_render_res));
-            if (ratio > 1.2f || ratio < 0.8f || factor == 1.0f || !m_dynamic_res || m_camera_path.rendering) {
-                render_res = new_render_res;
-            }
-
-            if (view.render_buffer->dlss()) {
-                render_res = view.render_buffer->dlss()->clamp_resolution(render_res);
-                view.render_buffer->dlss()->update_feature(render_res, view.render_buffer->dlss()->is_hdr(), view.render_buffer->dlss()->sharpen());
-            }
-
-            view.render_buffer->resize(render_res);
-
-            if (m_foveated_rendering) {
-                if (m_dynamic_foveated_rendering) {
-                    vec2 resolution_scale = vec2(render_res) / vec2(view.full_resolution);
-
-                    // Only start foveation when DLSS if off or if DLSS is asked to do more than 1.5x upscaling.
-                    // The reason for the 1.5x threshold is that DLSS can do up to 3x upscaling, at which point a foveation
-                    // factor of 2x = 3.0x/1.5x corresponds exactly to bilinear super sampling, which is helpful in
-                    // suppressing DLSS's artifacts.
-                    float foveation_begin_factor = m_dlss ? 1.5f : 1.0f;
-
-                    resolution_scale = clamp(resolution_scale * foveation_begin_factor, vec2(1.0f / m_foveated_rendering_max_scaling), vec2(1.0f));
-                    view.foveation = {resolution_scale, vec2(1.0f) - view.screen_center, vec2(m_foveated_rendering_full_res_diameter * 0.5f)};
-
-                    m_foveated_rendering_scaling = 2.0f / compAdd(resolution_scale);
-                } else {
-                    view.foveation = {vec2(1.0f / m_foveated_rendering_scaling), vec2(1.0f) - view.screen_center, vec2(m_foveated_rendering_full_res_diameter * 0.5f)};
-                }
-            } else {
-                view.foveation = {};
-            }
+        } else {
+            m_view.foveation = {};
         }
     }
 
     // Make sure all in-use auxiliary GPUs have the latest model and bitfield
     std::unordered_set<CudaDevice*> devices_in_use;
-    for (auto& view : m_views) {
-        if (!view.device || devices_in_use.count(view.device) != 0) {
-            continue;
-        }
-
-        devices_in_use.insert(view.device);
-        sync_device(*view.render_buffer, *view.device);
+    if (m_view.device && devices_in_use.count(m_view.device) == 0) {
+        devices_in_use.insert(m_view.device);
+        sync_device(*m_view.render_buffer, *m_view.device);
     }
 
     {
-        SyncedMultiStream synced_streams{m_stream.get(), m_views.size()};
+        auto device_guard = use_device(m_stream.get(), *m_view.render_buffer,
+                                       *m_view.device);
 
-        std::vector<std::future<void>> futures(m_views.size());
-        for (size_t i = 0; i < m_views.size(); ++i) {
-            auto& view = m_views[i];
-            futures[i] = view.device->enqueue_task([this, &view, stream=synced_streams.get(i)]() {
-                auto device_guard = use_device(stream, *view.render_buffer, *view.device);
+        //--------------------------------------------------------------
+        // Main rendering code is here.
+        render_frame_main(*m_view.device,
+                          m_view.camera0,
+                          m_view.camera1,
+                          m_view.screen_center,
+                          m_view.relative_focal_length,
+                          {0.0f, 0.0f, 0.0f, 1.0f},
+                          m_view.foveation,
+                          m_view.visualized_dimension);
+        render_frame_epilogue(m_stream.get(),
+                              m_view.camera0,
+                              m_view.prev_camera,
+                              m_view.screen_center,
+                              m_view.relative_focal_length,
+                              m_view.foveation,
+                              m_view.prev_foveation,
+                              *m_view.render_buffer,
+                              true);
+        //------------------------------------------------------------------
 
-                //--------------------------------------------------------------
-                // Main rendering code is here.
-                render_frame_main(*view.device,
-                                  view.camera0,
-                                  view.camera1,
-                                  view.screen_center,
-                                  view.relative_focal_length,
-                                  {0.0f, 0.0f, 0.0f, 1.0f},
-                                  view.foveation,
-                                  view.visualized_dimension);
-                //--------------------------------------------------------------
-            });
-        }
-
-        for (size_t i = 0; i < m_views.size(); ++i) {
-            auto& view = m_views[i];
-
-            if (futures[i].valid()) {
-                futures[i].get();
-            }
-
-            //------------------------------------------------------------------
-            // Main rendering code is here.
-            render_frame_epilogue(synced_streams.get(i),
-                                  view.camera0,
-                                  view.prev_camera,
-                                  view.screen_center,
-                                  view.relative_focal_length,
-                                  view.foveation,
-                                  view.prev_foveation,
-                                  *view.render_buffer,
-                                  true);
-            //------------------------------------------------------------------
-
-            view.prev_camera = view.camera0;
-            view.prev_foveation = view.foveation;
-        }
+        m_view.prev_camera = m_view.camera0;
+        m_view.prev_foveation = m_view.foveation;
     }
 
-//    for (size_t i = 0; i < m_views.size(); ++i) {
-//        m_rgba_render_textures.at(i)->blit_from_cuda_mapping();
-//        m_depth_render_textures.at(i)->blit_from_cuda_mapping();
-//    }
+    m_rgba_render_texture->blit_from_cuda_mapping();
+    m_depth_render_texture->blit_from_cuda_mapping();
 
-//	if (m_picture_in_picture_res > 0) {
-//		ivec2 res(m_picture_in_picture_res, m_picture_in_picture_res * 9/16);
-//		m_pip_render_buffer->resize(res);
-//		if (m_pip_render_buffer->spp() < 8) {
-//            // A bit gross, but let's copy the keyframe's state into the global state in order to not have to plumb through the fov etc to render_frame.
-//			CameraKeyframe backup = copy_camera_to_keyframe();
-//			CameraKeyframe pip_kf = m_camera_path.eval_camera_path(m_camera_path.play_time);
-//			set_camera_from_keyframe(pip_kf);
-//            render_frame(m_stream.get(), pip_kf.m(), pip_kf.m(), pip_kf.m(), m_screen_center, m_relative_focal_length, vec4(0.0f), {}, {}, m_visualized_dimension, *m_pip_render_buffer);
-//			set_camera_from_keyframe(backup);
+    if (m_picture_in_picture_res > 0) {
+        ivec2 res(m_picture_in_picture_res, m_picture_in_picture_res * 9/16);
+        m_pip_render_buffer->resize(res);
+        if (m_pip_render_buffer->spp() < 8) {
+            // A bit gross, but let's copy the keyframe's state into the global state in order to not have to plumb through the fov etc to render_frame.
+            CameraKeyframe backup = copy_camera_to_keyframe();
+            CameraKeyframe pip_kf = m_camera_path.eval_camera_path(m_camera_path.play_time);
+            set_camera_from_keyframe(pip_kf);
+            render_frame(m_stream.get(), pip_kf.m(), pip_kf.m(), pip_kf.m(), m_screen_center, m_relative_focal_length, vec4(0.0f), {}, {}, m_visualized_dimension, *m_pip_render_buffer);
+            set_camera_from_keyframe(backup);
 
-//			m_pip_render_texture->blit_from_cuda_mapping();
-//		}
-//	}
+            m_pip_render_texture->blit_from_cuda_mapping();
+        }
+    }
 #endif
 
 	CUDA_CHECK_THROW(cudaStreamSynchronize(m_stream.get()));
@@ -2795,22 +2768,6 @@ void Testbed::create_second_window() {
 	glBindVertexArray(0);
 }
 
-void Testbed::set_n_views(size_t n_views) {
-    while (m_views.size() > n_views) {
-        m_views.pop_back();
-    }
-
-    tlog::info() << m_views.size();
-//    m_rgba_render_textures.resize(n_views);
-    m_depth_render_textures.resize(n_views);
-    while (m_views.size() < n_views) {
-        size_t idx = m_views.size();
-        m_rgba_render_texture = std::make_shared<GLTexture>();
-        m_depth_render_textures[idx] = std::make_shared<GLTexture>();
-        m_views.emplace_back(View{std::make_shared<CudaRenderBuffer>(m_rgba_render_texture,
-                                  m_depth_render_textures[idx])});
-    }
-};
 #endif //NGP_GUI
 
 void Testbed::init_window(int resw, int resh, bool hidden, bool second_window) {
@@ -2957,13 +2914,12 @@ void Testbed::init_window(int resw, int resh, bool hidden, bool second_window) {
 
     // Make sure there's at least one usable render texture
     m_rgba_render_texture = std::make_shared<GLTexture>();
-    m_depth_render_textures = { std::make_shared<GLTexture>() };
+    m_depth_render_texture = std::make_shared<GLTexture>();
 
-    m_views.clear();
-    m_views.emplace_back(View{std::make_shared<CudaRenderBuffer>(m_rgba_render_texture,
-                              m_depth_render_textures.front())});
-    m_views.front().full_resolution = m_window_res;
-    m_views.front().render_buffer->resize(m_views.front().full_resolution);
+    m_view = View{std::make_shared<CudaRenderBuffer>(m_rgba_render_texture,
+                                                     m_depth_render_texture)};
+    m_view.full_resolution = m_window_res;
+    m_view.render_buffer->resize(m_view.full_resolution);
 
 	m_pip_render_texture = std::make_shared<GLTexture>();
 	m_pip_render_buffer = std::make_unique<CudaRenderBuffer>(m_pip_render_texture);
@@ -2984,9 +2940,8 @@ void Testbed::destroy_window() {
 		throw std::runtime_error{"Window must be initialized to be destroyed."};
 	}
 
-    m_views.clear();
     m_rgba_render_texture.reset();
-    m_depth_render_textures.clear();
+    m_depth_render_texture.reset();
 
 	m_pip_render_buffer.reset();
 	m_pip_render_texture.reset();
@@ -3033,13 +2988,13 @@ bool Testbed::frame() {
     bool skip_rendering =
             m_render_skip_due_to_lack_of_camera_movement_counter++ != 0;
 
-    if (!m_dlss && m_max_spp > 0 && !m_views.empty() &&
-        m_views.front().render_buffer->spp() >= m_max_spp) {
-		skip_rendering = true;
-		if (!m_train) {
-			std::this_thread::sleep_for(1ms);
-		}
-	}
+    if (!m_dlss && m_max_spp > 0 && m_view.render_buffer.get() &&
+        m_view.render_buffer->spp() >= m_max_spp) {
+        skip_rendering = true;
+        if (!m_train) {
+            std::this_thread::sleep_for(1ms);
+        }
+    }
 
 	if (m_camera_path.rendering) {
 		prepare_next_camera_path_frame();
@@ -3543,7 +3498,7 @@ Testbed::Testbed(ETestbedMode mode) {
 		}
 	}
 
-	m_network_config = {
+    m_network_config = {
 		{"loss", {
 			{"otype", "L2"}
 		}},
@@ -3572,8 +3527,8 @@ Testbed::Testbed(ETestbedMode mode) {
 	};
 
 	set_mode(mode);
-	set_exposure(0);
-	set_max_level(1.f);
+    set_exposure(0);
+    set_max_level(1.f);
 
 	reset_camera();
 }
@@ -3652,7 +3607,7 @@ void Testbed::train(uint32_t batch_size) {
 		}};
 
 		switch (m_testbed_mode) {
-			case ETestbedMode::Nerf: training_prep_nerf(batch_size, m_stream.get()); break;
+            case ETestbedMode::Nerf: training_prep_nerf(batch_size, m_stream.get()); break;
 			case ETestbedMode::Sdf: training_prep_sdf(batch_size, m_stream.get()); break;
 			case ETestbedMode::Image: training_prep_image(batch_size, m_stream.get()); break;
 			case ETestbedMode::Volume: training_prep_volume(batch_size, m_stream.get()); break;
@@ -3942,29 +3897,44 @@ void Testbed::render_frame(cudaStream_t stream,
 	render_frame_epilogue(stream, camera_matrix0, prev_camera_matrix, orig_screen_center, relative_focal_length, foveation, prev_foveation, render_buffer, to_srgb);
 }
 
-void Testbed::render_frame_main(
-	CudaDevice& device,
-	const mat4x3& camera_matrix0,
-	const mat4x3& camera_matrix1,
-	const vec2& orig_screen_center,
-	const vec2& relative_focal_length,
-	const vec4& nerf_rolling_shutter,
-	const Foveation& foveation,
-	int visualized_dimension
-) {
+/**
+ * Main function to render the scene.
+ */
+void Testbed::render_frame_main(CudaDevice& device,
+                                const mat4x3& camera_matrix0,
+                                const mat4x3& camera_matrix1,
+                                const vec2& orig_screen_center,
+                                const vec2& relative_focal_length,
+                                const vec4& nerf_rolling_shutter,
+                                const Foveation& foveation,
+                                int visualized_dimension) {
 	device.render_buffer_view().clear(device.stream());
 
 	if (!m_network) {
 		return;
 	}
 
-	vec2 focal_length = calc_focal_length(device.render_buffer_view().resolution, relative_focal_length, m_fov_axis, m_zoom);
+    vec2 focal_length =
+            calc_focal_length(device.render_buffer_view().resolution,
+                              relative_focal_length,
+                              m_fov_axis,
+                              m_zoom);
 	vec2 screen_center = render_screen_center(orig_screen_center);
 
 	switch (m_testbed_mode) {
 		case ETestbedMode::Nerf:
 			if (!m_render_ground_truth || m_ground_truth_alpha < 1.0f) {
-				render_nerf(device.stream(), device.render_buffer_view(), *device.nerf_network(), device.data().density_grid_bitfield_ptr, focal_length, camera_matrix0, camera_matrix1, nerf_rolling_shutter, screen_center, foveation, visualized_dimension);
+                render_nerf(device.stream(),
+                            device.render_buffer_view(),
+                            *device.nerf_network(),
+                            device.data().density_grid_bitfield_ptr,
+                            focal_length,
+                            camera_matrix0,
+                            camera_matrix1,
+                            nerf_rolling_shutter,
+                            screen_center,
+                            foveation,
+                            visualized_dimension);
 			}
 			break;
 		case ETestbedMode::Sdf:

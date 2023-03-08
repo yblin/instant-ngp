@@ -592,12 +592,11 @@ public:
     void init_opengl_shaders();
     void blit_texture(const Foveation& foveation, GLint rgba_texture, GLint rgba_filter_mode, GLint depth_texture, GLint framebuffer, const ivec2& offset, const ivec2& resolution);
     void create_second_window();
-    void set_n_views(size_t n_views);
 
     std::function<bool()> m_keyboard_event_callback;
     std::shared_ptr<GLTexture> m_pip_render_texture;
     std::shared_ptr<GLTexture> m_rgba_render_texture;
-    std::vector<std::shared_ptr<GLTexture>> m_depth_render_textures;
+    std::shared_ptr<GLTexture> m_depth_render_texture;
 #endif
 
     std::unique_ptr<CudaRenderBuffer> m_pip_render_buffer;
@@ -612,8 +611,12 @@ public:
     struct Nerf {
         struct Training {
             NerfDataset dataset;
-            int n_images_for_training = 0; // how many images to train from, as a high watermark compared to the dataset size
-            int n_images_for_training_prev = 0; // how many images we saw last time we updated the density grid
+
+            // How many images to train from, as a high watermark compared to
+            // the dataset size.
+            int n_images_for_training = 0;
+            // How many images we saw last time we updated the density grid
+            int n_images_for_training_prev = 0;
 
             struct ErrorMap {
                 tcnn::GPUMemory<float> data;
@@ -647,7 +650,9 @@ public:
             std::vector<RotationAdamOptimizer> cam_rot_offset;
             AdamOptimizer<vec2> cam_focal_length_offset = AdamOptimizer<vec2>(0.0f);
 
-            tcnn::GPUMemory<float> extra_dims_gpu; // if the model demands a latent code per training image, we put them in here.
+            // If the model demands a latent code per training image, we put
+            // them in here.
+            tcnn::GPUMemory<float> extra_dims_gpu;
             tcnn::GPUMemory<float> extra_dims_gradient_gpu;
             std::vector<VarAdamOptimizer> extra_dims_opt;
 
@@ -709,7 +714,8 @@ public:
             void export_camera_extrinsics(const fs::path& path, bool export_extrinsics_in_quat_format = true);
         } training = {};
 
-        tcnn::GPUMemory<float> density_grid; // NERF_GRIDSIZE()^3 grid of EMA smoothed densities from the network
+        // NERF_GRIDSIZE()^3 grid of EMA smoothed densities from the network.
+        tcnn::GPUMemory<float> density_grid;
         tcnn::GPUMemory<uint8_t> density_grid_bitfield;
         uint8_t* get_density_grid_bitfield_mip(uint32_t mip);
         tcnn::GPUMemory<float> density_grid_mean;
@@ -721,7 +727,9 @@ public:
         ENerfActivation density_activation = ENerfActivation::Exponential;
 
         vec3 light_dir = vec3(0.5f);
-        uint32_t extra_dim_idx_for_inference = 0; // which training image's latent code should be presented at inference time
+        // Which training image's latent code should be presented at inference
+        // time
+        uint32_t extra_dim_idx_for_inference = 0;
 
         int show_accel = -1;
 
@@ -904,8 +912,7 @@ public:
 
         CudaDevice* device = nullptr;
     };
-
-    std::vector<View> m_views;
+    View m_view;
 
     // If non zero, requests a small second picture :)
     float m_picture_in_picture_res = 0.f;

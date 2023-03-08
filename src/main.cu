@@ -157,7 +157,7 @@ int main_func(const std::vector<std::string>& arguments) {
 		testbed.reload_network_from_file(get(network_config_flag));
 	}
 
-	testbed.m_train = !no_train_flag;
+    testbed.m_train = !no_train_flag;
 
 #ifdef NGP_GUI
 	bool gui = !no_gui_flag;
@@ -168,11 +168,11 @@ int main_func(const std::vector<std::string>& arguments) {
 	if (gui) {
         testbed.init_window(width_flag ? get(width_flag) : 1920,
                             height_flag ? get(height_flag) : 1080);
-	}
+    }
 
 	// Render/training loop
-	while (testbed.frame()) {
-		if (!gui) {
+    while (testbed.frame()) {
+        if (!gui) {
             tlog::info() << "iteration=" << testbed.m_training_step << " loss="
                          << testbed.m_loss_scalar.val();
 		}
