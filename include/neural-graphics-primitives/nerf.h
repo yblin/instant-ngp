@@ -21,11 +21,11 @@
 NGP_NAMESPACE_BEGIN
 
 // size of the density/occupancy grid in number of cells along an axis.
-inline constexpr __device__ uint32_t NERF_GRIDSIZE() {
+inline constexpr __host__ __device__ uint32_t NERF_GRIDSIZE() {
 	return 128;
 }
 
-inline constexpr __device__ uint32_t NERF_GRID_N_CELLS() {
+inline constexpr __host__ __device__ uint32_t NERF_GRID_N_CELLS() {
 	return NERF_GRIDSIZE() * NERF_GRIDSIZE() * NERF_GRIDSIZE();
 }
 

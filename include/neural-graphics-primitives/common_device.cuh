@@ -912,8 +912,16 @@ inline NGP_HOST_DEVICE vec4 read_rgba(ivec2 px, const ivec2& resolution, const v
 	}
 }
 
-inline NGP_HOST_DEVICE vec4 read_rgba(vec2 pos, const ivec2& resolution, const void* pixels, EImageDataType image_data_type, uint32_t img = 0) {
-	return read_rgba(image_pos(pos, resolution), resolution, pixels, image_data_type, img);
+/**
+ * Retrun the RGBA value at 'pos' of the image ('pixels').
+ */
+inline NGP_HOST_DEVICE vec4 read_rgba(vec2 pos,
+                                      const ivec2& resolution,
+                                      const void* pixels,
+                                      EImageDataType image_data_type,
+                                      uint32_t img = 0) {
+    return read_rgba(image_pos(pos, resolution), resolution, pixels,
+                     image_data_type, img);
 }
 
 inline NGP_HOST_DEVICE float read_depth(vec2 pos, const ivec2& resolution, const float* depth, uint32_t img = 0) {

@@ -401,8 +401,10 @@ public:
     void mark_density_grid_in_sphere_empty(const vec3& pos, float radius, cudaStream_t stream);
 
     struct NerfCounters {
-        tcnn::GPUMemory<uint32_t> numsteps_counter; // number of steps each ray took
-        tcnn::GPUMemory<uint32_t> numsteps_counter_compacted; // number of steps each ray took
+        // Number of steps each ray took.
+        tcnn::GPUMemory<uint32_t> numsteps_counter;
+        // Number of steps each ray took.
+        tcnn::GPUMemory<uint32_t> numsteps_counter_compacted;
         tcnn::GPUMemory<float> loss;
 
         uint32_t rays_per_batch = 1<<12;
@@ -570,7 +572,7 @@ public:
     float m_exposure = 0.f;
 
     ERenderMode m_render_mode = ERenderMode::Shade;
-    EMeshRenderMode m_mesh_render_mode = EMeshRenderMode::VertexNormals;
+    EMeshRenderMode m_mesh_render_mode = EMeshRenderMode::VertexColors;
 
     uint32_t m_seed = 1337;
 

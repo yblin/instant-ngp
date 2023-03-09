@@ -36,6 +36,7 @@
 #include <filesystem/directory.h>
 #include <filesystem/path.h>
 
+#include <tiny_obj_loader.h>
 
 #ifdef copysign
 #undef copysign
@@ -46,21 +47,38 @@ using namespace tcnn;
 NGP_NAMESPACE_BEGIN
 
 inline constexpr __device__ float NERF_RENDERING_NEAR_DISTANCE() { return 0.05f; }
-inline constexpr __device__ uint32_t NERF_STEPS() { return 1024; } // finest number of steps per unit length
-inline constexpr __device__ uint32_t NERF_CASCADES() { return 8; }
+
+// Finest number of steps per unit length.
+inline constexpr __host__ __device__ uint32_t NERF_STEPS()    { return 1024; }
+inline constexpr __host__ __device__ uint32_t NERF_CASCADES() { return 8;    }
 
 inline constexpr __device__ float SQRT3() { return 1.73205080757f; }
-inline constexpr __device__ float STEPSIZE() { return (SQRT3() / NERF_STEPS()); } // for nerf raymarch
-inline constexpr __device__ float MIN_CONE_STEPSIZE() { return STEPSIZE(); }
-// Maximum step size is the width of the coarsest gridsize cell.
-inline constexpr __device__ float MAX_CONE_STEPSIZE() { return STEPSIZE() * (1<<(NERF_CASCADES()-1)) * NERF_STEPS() / NERF_GRIDSIZE(); }
+
+/**
+ * For nerf raymarch, sqrt(3) represents the diagonal of the unit cube.
+ */
+inline constexpr __device__ float STEPSIZE() {
+    return (SQRT3() / NERF_STEPS());
+}
+
+inline constexpr __device__ float MIN_CONE_STEPSIZE() {
+    return STEPSIZE();
+}
+
+/**
+ * Maximum step size is the width of the coarsest gridsize cell.
+ */
+inline constexpr __device__ float MAX_CONE_STEPSIZE() {
+    return STEPSIZE() * (1 << (NERF_CASCADES() - 1)) * NERF_STEPS() /
+           NERF_GRIDSIZE();
+}
 
 // Used to index into the PRNG stream. Must be larger than the number of
 // samples consumed by any given training ray.
 inline constexpr __device__ uint32_t N_MAX_RANDOM_SAMPLES_PER_RAY() { return 16; }
 
 // Any alpha below this is considered "invisible" and is thus culled away.
-inline constexpr __device__ float NERF_MIN_OPTICAL_THICKNESS() { return 0.01f; }
+inline constexpr __host__ __device__ float NERF_MIN_OPTICAL_THICKNESS() { return 0.01f; }
 
 static constexpr uint32_t MARCH_ITER = 10000;
 
@@ -132,10 +150,19 @@ inline __host__ __device__ float from_stepping_space(float n, float cone_angle) 
 	}
 }
 
-inline __host__ __device__ float advance_n_steps(float t, float cone_angle, float n) {
+/**
+ * Return the step size.
+ *
+ * The step size is proportional to the distance 'n' along the ray.
+ */
+inline __host__ __device__ float advance_n_steps(float t, float cone_angle,
+                                                 float n) {
 	return from_stepping_space(to_stepping_space(t, cone_angle) + n, cone_angle);
 }
 
+/**
+ * Return the length of one step.
+ */
 inline __host__ __device__ float calc_dt(float t, float cone_angle) {
 	return advance_n_steps(t, cone_angle, 1.0f) - t;
 }
@@ -231,7 +258,8 @@ inline __device__ LossAndGradient mape_loss(const vec3& target, const vec3& pred
 	};
 }
 
-inline __device__ float distance_to_next_voxel(const vec3& pos, const vec3& dir, const vec3& idir, float res) { // dda like step
+inline __device__ float distance_to_next_voxel(const vec3& pos, const vec3& dir,
+                                               const vec3& idir, float res) { // dda like step
 	vec3 p = res * (pos - vec3(0.5f));
 	float tx = (floorf(p.x + 0.5f + 0.5f * sign(dir.x)) - p.x) * idir.x;
 	float ty = (floorf(p.y + 0.5f + 0.5f * sign(dir.y)) - p.y) * idir.y;
@@ -241,16 +269,23 @@ inline __device__ float distance_to_next_voxel(const vec3& pos, const vec3& dir,
 	return fmaxf(t / res, 0.0f);
 }
 
-inline __device__ float advance_to_next_voxel(float t, float cone_angle, const vec3& pos, const vec3& dir, const vec3& idir, uint32_t mip) {
+inline __device__ float advance_to_next_voxel(float t,
+                                              float cone_angle,
+                                              const vec3& pos,
+                                              const vec3& dir,
+                                              const vec3& idir,
+                                              uint32_t mip) {
 	float res = scalbnf(NERF_GRIDSIZE(), -(int)mip);
 
 	float t_target = t + distance_to_next_voxel(pos, dir, idir, res);
 
-	// Analytic stepping in multiples of 1 in the "log-space" of our exponential stepping routine
+    // Analytic stepping in multiples of 1 in the "log-space" of our exponential
+    // stepping routine.
 	t = to_stepping_space(t, cone_angle);
 	t_target = to_stepping_space(t_target, cone_angle);
 
-	return from_stepping_space(t + ceilf(fmaxf(t_target - t, 0.5f)), cone_angle);
+    return from_stepping_space(t + ceilf(fmaxf(t_target - t, 0.5f)),
+                               cone_angle);
 }
 
 __device__ float network_to_rgb(float val, ENerfActivation activation) {
@@ -752,7 +787,8 @@ __device__ void advance_pos_nerf(
 	vec3 dir = payload.dir;
 	vec3 idir = vec3(1.0f) / dir;
 
-	float cone_angle = calc_cone_angle(dot(dir, camera_fwd), focal_length, cone_angle_constant);
+    float cone_angle = calc_cone_angle(dot(dir, camera_fwd), focal_length,
+                                       cone_angle_constant);
 
 	float t = advance_n_steps(payload.t, cone_angle, ld_random_val(sample_index, payload.idx * 786433));
 	t = if_unoccupied_advance_to_next_occupied_voxel(t, cone_angle, {origin, dir}, idir, density_grid, min_mip, max_mip, render_aabb, render_aabb_to_local);
@@ -958,7 +994,7 @@ __global__ void composite_kernel_nerf(
 
 			// less used?
 			bool radial_mode = glow_mode & 8;
-			bool grid_mode = glow_mode & 16; // makes object rgb go black!
+            bool grid_mode = glow_mode & 16; // makes object rgb go black!
 
 			{
 				float dist;
@@ -1133,7 +1169,18 @@ inline __device__ float pdf_2d(vec2 sample, uint32_t img, const ivec2& res, cons
 	return UNIFORM_SAMPLING_FRACTION + pmf * compMul(res) * (1.0f - UNIFORM_SAMPLING_FRACTION);
 }
 
-inline __device__ vec2 nerf_random_image_pos_training(default_rng_t& rng, const ivec2& resolution, bool snap_to_pixel_centers, const float* __restrict__ cdf_x_cond_y, const float* __restrict__ cdf_y, const ivec2& cdf_res, uint32_t img, float* __restrict__ pdf = nullptr) {
+/**
+ * Get a random image position.
+ */
+inline __device__ vec2
+nerf_random_image_pos_training(default_rng_t& rng,
+                               const ivec2& resolution,
+                               bool snap_to_pixel_centers,
+                               const float* __restrict__ cdf_x_cond_y,
+                               const float* __restrict__ cdf_y,
+                               const ivec2& cdf_res,
+                               uint32_t img,
+                               float* __restrict__ pdf = nullptr) {
 	vec2 uv = random_val_2d(rng);
 
 	if (cdf_x_cond_y) {
@@ -1143,7 +1190,9 @@ inline __device__ vec2 nerf_random_image_pos_training(default_rng_t& rng, const 
 	}
 
 	if (snap_to_pixel_centers) {
-		uv = (vec2(clamp(ivec2(uv * vec2(resolution)), ivec2(0), resolution - ivec2(1))) + vec2(0.5f)) / vec2(resolution);
+        uv = (vec2(clamp(ivec2(uv * vec2(resolution)),
+                         ivec2(0), resolution - ivec2(1))) +
+              vec2(0.5f)) / vec2(resolution);
 	}
 
 	return uv;
@@ -1189,7 +1238,29 @@ __device__ LossAndGradient loss_and_gradient(const vec3& target, const vec3& pre
 	}
 }
 
-
+/**
+ * Generate trainning samples for NeRF.
+ *
+ * Paramters:
+ *  n_rays                  - number of rays in one batch.
+ *  aabb                    - bounding box of the NeRF scene.
+ *  max_samples             - total number of samples.
+ *  n_rays_total            - number of taotal rays.
+ *  rng                     - random engine.
+ *  n_training_images       - number of trainning images.
+ *  metadata                - training image metadata.
+ *  training_xforms         - used for rolling shutter.
+ *  max_level_rand_training - not used by default.
+ *  snap_to_pixel_centers   - snap the ray to the center of pixel.
+ *  cone_angle_constant     - cone angle for MIP.
+ *  cdf_x_cond_y,
+ *  cdf_y,
+ *  cdf_img,
+ *  cdf_res                 - use error_map for importance sampling
+ *                            (not used by default).
+ *  extra_dims_gpu          - not used by default.
+ *  n_extra_dims            - not used by default.
+ */
 __global__ void generate_training_samples_nerf(
 	const uint32_t n_rays,
 	BoundingBox aabb,
@@ -1223,19 +1294,28 @@ __global__ void generate_training_samples_nerf(
 	const uint32_t i = threadIdx.x + blockIdx.x * blockDim.x;
 	if (i >= n_rays) return;
 
-	uint32_t img = image_idx(i, n_rays, n_rays_total, n_training_images, cdf_img);
+    uint32_t img = image_idx(i, n_rays, n_rays_total, n_training_images,
+                             cdf_img);
 	ivec2 resolution = metadata[img].resolution;
 
 	rng.advance(i * N_MAX_RANDOM_SAMPLES_PER_RAY());
-	vec2 uv = nerf_random_image_pos_training(rng, resolution, snap_to_pixel_centers, cdf_x_cond_y, cdf_y, cdf_res, img);
+    vec2 uv = nerf_random_image_pos_training(rng,
+                                             resolution,
+                                             snap_to_pixel_centers,
+                                             cdf_x_cond_y,
+                                             cdf_y,
+                                             cdf_res,
+                                             img);
 
-	// Negative values indicate masked-away regions
+    // Negative values indicate masked-away regions.
 	size_t pix_idx = pixel_idx(uv, resolution, 0);
-	if (read_rgba(uv, resolution, metadata[img].pixels, metadata[img].image_data_type).x < 0.0f) {
+    if (read_rgba(uv, resolution, metadata[img].pixels,
+                  metadata[img].image_data_type).x < 0.0f) {
 		return;
 	}
 
-	float max_level = max_level_rand_training ? (random_val(rng) * 2.0f) : 1.0f; // Multiply by 2 to ensure 50% of training is at max level
+    // Multiply by 2 to ensure 50% of training is at max level.
+    float max_level = max_level_rand_training ? (random_val(rng) * 2.0f) : 1.0f;
 
 	float motionblur_time = random_val(rng);
 
@@ -1244,7 +1324,11 @@ __global__ void generate_training_samples_nerf(
 	const float* extra_dims = extra_dims_gpu + img * n_extra_dims;
 	const Lens lens = metadata[img].lens;
 
-	const mat4x3 xform = get_xform_given_rolling_shutter(training_xforms[img], metadata[img].rolling_shutter, uv, motionblur_time);
+    const mat4x3 xform =
+            get_xform_given_rolling_shutter(training_xforms[img],
+                                            metadata[img].rolling_shutter,
+                                            uv,
+                                            motionblur_time);
 
 	Ray ray_unnormalized;
 	const Ray* rays_in_unnormalized = metadata[img].rays;
@@ -1272,43 +1356,56 @@ __global__ void generate_training_samples_nerf(
 		}
 		*/
 	} else {
-		ray_unnormalized = uv_to_ray(0, uv, resolution, focal_length, xform, principal_point, vec3(0.0f), 0.0f, 1.0f, 0.0f, {}, {}, lens, distortion);
+        ray_unnormalized = uv_to_ray(0, uv, resolution, focal_length, xform,
+                                     principal_point, vec3(0.0f), 0.0f, 1.0f,
+                                     0.0f, {}, {}, lens, distortion);
 		if (!ray_unnormalized.is_valid()) {
 			ray_unnormalized = {xform[3], xform[2]};
 		}
 	}
 
+    // Get normalized ray direction.
 	vec3 ray_d_normalized = normalize(ray_unnormalized.d);
 
 	vec2 tminmax = aabb.ray_intersect(ray_unnormalized.o, ray_d_normalized);
-	float cone_angle = calc_cone_angle(dot(ray_d_normalized, xform[2]), focal_length, cone_angle_constant);
+    float cone_angle = calc_cone_angle(dot(ray_d_normalized, xform[2]),
+                                       focal_length,
+                                       cone_angle_constant);
 
-	// The near distance prevents learning of camera-specific fudge right in front of the camera
+    // The near distance prevents learning of camera-specific fudge right in
+    // front of the camera.
 	tminmax.x = fmaxf(tminmax.x, 0.0f);
 
 	float startt = advance_n_steps(tminmax.x, cone_angle, random_val(rng));
 	vec3 idir = vec3(1.0f) / ray_d_normalized;
 
-	// first pass to compute an accurate number of steps
+    // First pass to compute an accurate number of steps.
 	uint32_t j = 0;
 	float t = startt;
 	vec3 pos;
 
-	while (aabb.contains(pos = ray_unnormalized.o + t * ray_d_normalized) && j < NERF_STEPS()) {
+    while (aabb.contains(pos = ray_unnormalized.o + t * ray_d_normalized) &&
+           j < NERF_STEPS()) {
+        // Compute step size.
 		float dt = calc_dt(t, cone_angle);
+
 		uint32_t mip = mip_from_dt(dt, pos, max_mip);
 		if (density_grid_occupied_at(pos, density_grid, mip)) {
 			++j;
 			t += dt;
 		} else {
-			t = advance_to_next_voxel(t, cone_angle, pos, ray_d_normalized, idir, mip);
+            t = advance_to_next_voxel(t, cone_angle, pos, ray_d_normalized,
+                                      idir, mip);
 		}
 	}
 	if (j == 0 && !train_envmap) {
 		return;
 	}
 	uint32_t numsteps = j;
-	uint32_t base = atomicAdd(numsteps_counter, numsteps);	 // first entry in the array is a counter
+
+    // Note that in CUDA the return value of 'atomicAdd' is the previously
+    // stored value.
+    uint32_t base = atomicAdd(numsteps_counter, numsteps);
 	if (base + numsteps > max_samples) {
 		return;
 	}
@@ -1319,21 +1416,25 @@ __global__ void generate_training_samples_nerf(
 
 	ray_indices_out[ray_idx] = i;
 	rays_out_unnormalized[ray_idx] = ray_unnormalized;
-	numsteps_out[ray_idx*2+0] = numsteps;
-	numsteps_out[ray_idx*2+1] = base;
+    numsteps_out[ray_idx * 2 + 0] = numsteps;
+    numsteps_out[ray_idx * 2 + 1] = base;
 
 	vec3 warped_dir = warp_direction(ray_d_normalized);
-	t=startt;
-	j=0;
-	while (aabb.contains(pos = ray_unnormalized.o + t * ray_d_normalized) && j < numsteps) {
+    t = startt;
+    j = 0;
+    while (aabb.contains(pos = ray_unnormalized.o + t * ray_d_normalized) &&
+           j < numsteps) {
 		float dt = calc_dt(t, cone_angle);
 		uint32_t mip = mip_from_dt(dt, pos, max_mip);
 		if (density_grid_occupied_at(pos, density_grid, mip)) {
-			coords_out(j)->set_with_optional_extra_dims(warp_position(pos, aabb), warped_dir, warp_dt(dt), extra_dims, coords_out.stride_in_bytes);
+            coords_out(j)->set_with_optional_extra_dims(
+                        warp_position(pos, aabb), warped_dir, warp_dt(dt),
+                        extra_dims, coords_out.stride_in_bytes);
 			++j;
 			t += dt;
 		} else {
-			t = advance_to_next_voxel(t, cone_angle, pos, ray_d_normalized, idir, mip);
+            t = advance_to_next_voxel(t, cone_angle, pos, ray_d_normalized,
+                                      idir, mip);
 		}
 	}
 
@@ -1344,7 +1445,6 @@ __global__ void generate_training_samples_nerf(
 		}
 	}
 }
-
 
 __global__ void compute_loss_kernel_train_nerf(
 	const uint32_t n_rays,
@@ -2955,255 +3055,284 @@ void Testbed::train_nerf(uint32_t target_batch_size, bool get_loss_scalar, cudaS
 		return;
 	}
 
-	if (m_nerf.training.include_sharpness_in_error) {
-		size_t n_cells = NERF_GRID_N_CELLS() * NERF_CASCADES();
-		if (m_nerf.training.sharpness_grid.size() < n_cells) {
-			m_nerf.training.sharpness_grid.enlarge(NERF_GRID_N_CELLS() * NERF_CASCADES());
-			CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.sharpness_grid.data(), 0, m_nerf.training.sharpness_grid.get_bytes(), stream));
-		}
+    if (m_nerf.training.include_sharpness_in_error) {
+        size_t n_cells = NERF_GRID_N_CELLS() * NERF_CASCADES();
+        if (m_nerf.training.sharpness_grid.size() < n_cells) {
+            m_nerf.training.sharpness_grid.enlarge(NERF_GRID_N_CELLS() *
+                                                   NERF_CASCADES());
+            CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.sharpness_grid.data(),
+                                             0,
+                                             m_nerf.training.sharpness_grid.get_bytes(),
+                                             stream));
+        }
 
-		if (m_training_step == 0) {
-			CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.sharpness_grid.data(), 0, m_nerf.training.sharpness_grid.get_bytes(), stream));
-		} else {
-			linear_kernel(decay_sharpness_grid_nerf, 0, stream, m_nerf.training.sharpness_grid.size(), 0.95f, m_nerf.training.sharpness_grid.data());
-		}
-	}
-	m_nerf.training.counters_rgb.prepare_for_training_steps(stream);
+        if (m_training_step == 0) {
+            CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.sharpness_grid.data(),
+                                             0,
+                                             m_nerf.training.sharpness_grid.get_bytes(),
+                                             stream));
+        } else {
+            linear_kernel(decay_sharpness_grid_nerf, 0, stream,
+                          m_nerf.training.sharpness_grid.size(),
+                          0.95f,
+                          m_nerf.training.sharpness_grid.data());
+        }
+    }
+    m_nerf.training.counters_rgb.prepare_for_training_steps(stream);
 
-	if (m_nerf.training.n_steps_since_cam_update == 0) {
-		CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.cam_pos_gradient_gpu.data(), 0, m_nerf.training.cam_pos_gradient_gpu.get_bytes(), stream));
-		CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.cam_rot_gradient_gpu.data(), 0, m_nerf.training.cam_rot_gradient_gpu.get_bytes(), stream));
-		CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.cam_exposure_gradient_gpu.data(), 0, m_nerf.training.cam_exposure_gradient_gpu.get_bytes(), stream));
-		CUDA_CHECK_THROW(cudaMemsetAsync(m_distortion.map->gradients(), 0, sizeof(float)*m_distortion.map->n_params(), stream));
-		CUDA_CHECK_THROW(cudaMemsetAsync(m_distortion.map->gradient_weights(), 0, sizeof(float)*m_distortion.map->n_params(), stream));
-		CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.cam_focal_length_gradient_gpu.data(), 0, m_nerf.training.cam_focal_length_gradient_gpu.get_bytes(), stream));
-	}
+    if (m_nerf.training.n_steps_since_cam_update == 0) {
+        CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.cam_pos_gradient_gpu.data(), 0, m_nerf.training.cam_pos_gradient_gpu.get_bytes(), stream));
+        CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.cam_rot_gradient_gpu.data(), 0, m_nerf.training.cam_rot_gradient_gpu.get_bytes(), stream));
+        CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.cam_exposure_gradient_gpu.data(), 0, m_nerf.training.cam_exposure_gradient_gpu.get_bytes(), stream));
+        CUDA_CHECK_THROW(cudaMemsetAsync(m_distortion.map->gradients(), 0, sizeof(float)*m_distortion.map->n_params(), stream));
+        CUDA_CHECK_THROW(cudaMemsetAsync(m_distortion.map->gradient_weights(), 0, sizeof(float)*m_distortion.map->n_params(), stream));
+        CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.cam_focal_length_gradient_gpu.data(), 0, m_nerf.training.cam_focal_length_gradient_gpu.get_bytes(), stream));
+    }
 
-	bool train_extra_dims = m_nerf.training.dataset.n_extra_learnable_dims > 0 && m_nerf.training.optimize_extra_dims;
-	uint32_t n_extra_dims = m_nerf.training.dataset.n_extra_dims();
-	if (train_extra_dims) {
-		uint32_t n = n_extra_dims * m_nerf.training.n_images_for_training;
-		m_nerf.training.extra_dims_gradient_gpu.enlarge(n);
-		CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.extra_dims_gradient_gpu.data(), 0, m_nerf.training.extra_dims_gradient_gpu.get_bytes(), stream));
-	}
+    bool train_extra_dims = m_nerf.training.dataset.n_extra_learnable_dims > 0 &&
+                            m_nerf.training.optimize_extra_dims;
+    uint32_t n_extra_dims = m_nerf.training.dataset.n_extra_dims();
+    if (train_extra_dims) {
+        uint32_t n = n_extra_dims * m_nerf.training.n_images_for_training;
+        m_nerf.training.extra_dims_gradient_gpu.enlarge(n);
+        CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.extra_dims_gradient_gpu.data(), 0, m_nerf.training.extra_dims_gradient_gpu.get_bytes(), stream));
+    }
 
-	if (m_nerf.training.n_steps_since_error_map_update == 0 && !m_nerf.training.dataset.metadata.empty()) {
-		uint32_t n_samples_per_image = (m_nerf.training.n_steps_between_error_map_updates * m_nerf.training.counters_rgb.rays_per_batch) / m_nerf.training.dataset.n_images;
-		ivec2 res = m_nerf.training.dataset.metadata[0].resolution;
-		m_nerf.training.error_map.resolution = min(ivec2((int)(std::sqrt(std::sqrt((float)n_samples_per_image)) * 3.5f)), res);
-		m_nerf.training.error_map.data.resize(compMul(m_nerf.training.error_map.resolution) * m_nerf.training.dataset.n_images);
-		CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.error_map.data.data(), 0, m_nerf.training.error_map.data.get_bytes(), stream));
-	}
+    if (m_nerf.training.n_steps_since_error_map_update == 0 &&
+        !m_nerf.training.dataset.metadata.empty()) {
+        uint32_t n_samples_per_image = (m_nerf.training.n_steps_between_error_map_updates * m_nerf.training.counters_rgb.rays_per_batch) / m_nerf.training.dataset.n_images;
+        ivec2 res = m_nerf.training.dataset.metadata[0].resolution;
+        m_nerf.training.error_map.resolution = min(ivec2((int)(std::sqrt(std::sqrt((float)n_samples_per_image)) * 3.5f)), res);
+        m_nerf.training.error_map.data.resize(compMul(m_nerf.training.error_map.resolution) * m_nerf.training.dataset.n_images);
+        CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.error_map.data.data(), 0, m_nerf.training.error_map.data.get_bytes(), stream));
+    }
 
-	float* envmap_gradient = m_nerf.training.train_envmap ? m_envmap.envmap->gradients() : nullptr;
-	if (envmap_gradient) {
-		CUDA_CHECK_THROW(cudaMemsetAsync(envmap_gradient, 0, sizeof(float)*m_envmap.envmap->n_params(), stream));
-	}
+    float* envmap_gradient = m_nerf.training.train_envmap ? m_envmap.envmap->gradients()
+                                                          : nullptr;
+    if (envmap_gradient) {
+        CUDA_CHECK_THROW(cudaMemsetAsync(envmap_gradient, 0, sizeof(float)*m_envmap.envmap->n_params(), stream));
+    }
 
+    //--------------------------------------------------------------------------
+    // In most case, just look at these two lines.
+    //
 	train_nerf_step(target_batch_size, m_nerf.training.counters_rgb, stream);
-
 	m_trainer->optimizer_step(stream, LOSS_SCALE);
+    //--------------------------------------------------------------------------
 
 	++m_training_step;
 
-	if (envmap_gradient) {
-		m_envmap.trainer->optimizer_step(stream, LOSS_SCALE);
-	}
+    if (envmap_gradient) {
+        m_envmap.trainer->optimizer_step(stream, LOSS_SCALE);
+    }
 
-	float loss_scalar = m_nerf.training.counters_rgb.update_after_training(target_batch_size, get_loss_scalar, stream);
-	bool zero_records = m_nerf.training.counters_rgb.measured_batch_size == 0;
-	if (get_loss_scalar) {
-		m_loss_scalar.update(loss_scalar);
-	}
+    float loss_scalar = m_nerf.training.counters_rgb.update_after_training(target_batch_size, get_loss_scalar, stream);
+    bool zero_records = m_nerf.training.counters_rgb.measured_batch_size == 0;
+    if (get_loss_scalar) {
+        m_loss_scalar.update(loss_scalar);
+    }
 
-	if (zero_records) {
-		m_loss_scalar.set(0.f);
-		tlog::warning() << "Nerf training generated 0 samples. Aborting training.";
-		m_train = false;
-	}
+    if (zero_records) {
+        m_loss_scalar.set(0.f);
+        tlog::warning() << "Nerf training generated 0 samples. Aborting training.";
+        m_train = false;
+    }
 
     // Compute CDFs from the error map,
-	m_nerf.training.n_steps_since_error_map_update += 1;
-	// This is low-overhead enough to warrant always being on.
-	// It makes for useful visualizations of the training error.
-	bool accumulate_error = true;
-	if (accumulate_error && m_nerf.training.n_steps_since_error_map_update >= m_nerf.training.n_steps_between_error_map_updates) {
-		m_nerf.training.error_map.cdf_resolution = m_nerf.training.error_map.resolution;
-		m_nerf.training.error_map.cdf_x_cond_y.resize(compMul(m_nerf.training.error_map.cdf_resolution) * m_nerf.training.dataset.n_images);
-		m_nerf.training.error_map.cdf_y.resize(m_nerf.training.error_map.cdf_resolution.y * m_nerf.training.dataset.n_images);
-		m_nerf.training.error_map.cdf_img.resize(m_nerf.training.dataset.n_images);
+    m_nerf.training.n_steps_since_error_map_update += 1;
+    // This is low-overhead enough to warrant always being on.
+    // It makes for useful visualizations of the training error.
+    bool accumulate_error = true;
+    if (accumulate_error && m_nerf.training.n_steps_since_error_map_update >= m_nerf.training.n_steps_between_error_map_updates) {
+        m_nerf.training.error_map.cdf_resolution = m_nerf.training.error_map.resolution;
+        m_nerf.training.error_map.cdf_x_cond_y.resize(compMul(m_nerf.training.error_map.cdf_resolution) * m_nerf.training.dataset.n_images);
+        m_nerf.training.error_map.cdf_y.resize(m_nerf.training.error_map.cdf_resolution.y * m_nerf.training.dataset.n_images);
+        m_nerf.training.error_map.cdf_img.resize(m_nerf.training.dataset.n_images);
 
-		CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.error_map.cdf_x_cond_y.data(), 0, m_nerf.training.error_map.cdf_x_cond_y.get_bytes(), stream));
-		CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.error_map.cdf_y.data(), 0, m_nerf.training.error_map.cdf_y.get_bytes(), stream));
-		CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.error_map.cdf_img.data(), 0, m_nerf.training.error_map.cdf_img.get_bytes(), stream));
+        CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.error_map.cdf_x_cond_y.data(), 0, m_nerf.training.error_map.cdf_x_cond_y.get_bytes(), stream));
+        CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.error_map.cdf_y.data(), 0, m_nerf.training.error_map.cdf_y.get_bytes(), stream));
+        CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.training.error_map.cdf_img.data(), 0, m_nerf.training.error_map.cdf_img.get_bytes(), stream));
 
-		const dim3 threads = { 16, 8, 1 };
-		const dim3 blocks = { div_round_up((uint32_t)m_nerf.training.error_map.cdf_resolution.y, threads.x), div_round_up((uint32_t)m_nerf.training.dataset.n_images, threads.y), 1 };
-		construct_cdf_2d<<<blocks, threads, 0, stream>>>(
-			m_nerf.training.dataset.n_images, m_nerf.training.error_map.cdf_resolution.y, m_nerf.training.error_map.cdf_resolution.x,
-			m_nerf.training.error_map.data.data(),
-			m_nerf.training.error_map.cdf_x_cond_y.data(),
-			m_nerf.training.error_map.cdf_y.data()
-		);
-		linear_kernel(construct_cdf_1d, 0, stream,
-			m_nerf.training.dataset.n_images,
-			m_nerf.training.error_map.cdf_resolution.y,
-			m_nerf.training.error_map.cdf_y.data(),
-			m_nerf.training.error_map.cdf_img.data()
-		);
+        const dim3 threads = { 16, 8, 1 };
+        const dim3 blocks = { div_round_up((uint32_t)m_nerf.training.error_map.cdf_resolution.y, threads.x), div_round_up((uint32_t)m_nerf.training.dataset.n_images, threads.y), 1 };
+        construct_cdf_2d<<<blocks, threads, 0, stream>>>(
+            m_nerf.training.dataset.n_images, m_nerf.training.error_map.cdf_resolution.y, m_nerf.training.error_map.cdf_resolution.x,
+            m_nerf.training.error_map.data.data(),
+            m_nerf.training.error_map.cdf_x_cond_y.data(),
+            m_nerf.training.error_map.cdf_y.data()
+        );
+        linear_kernel(construct_cdf_1d, 0, stream,
+            m_nerf.training.dataset.n_images,
+            m_nerf.training.error_map.cdf_resolution.y,
+            m_nerf.training.error_map.cdf_y.data(),
+            m_nerf.training.error_map.cdf_img.data()
+        );
 
-		// Compute image CDF on the CPU. It's single-threaded anyway. No use parallelizing.
-		m_nerf.training.error_map.pmf_img_cpu.resize(m_nerf.training.error_map.cdf_img.size());
-		m_nerf.training.error_map.cdf_img.copy_to_host(m_nerf.training.error_map.pmf_img_cpu);
-		std::vector<float> cdf_img_cpu = m_nerf.training.error_map.pmf_img_cpu; // Copy unnormalized PDF into CDF buffer
-		float cum = 0;
-		for (float& f : cdf_img_cpu) {
-			cum += f;
-			f = cum;
-		}
-		float norm = 1.0f / cum;
-		for (size_t i = 0; i < cdf_img_cpu.size(); ++i) {
-			constexpr float MIN_PMF = 0.1f;
-			m_nerf.training.error_map.pmf_img_cpu[i] = (1.0f - MIN_PMF) * m_nerf.training.error_map.pmf_img_cpu[i] * norm + MIN_PMF / (float)m_nerf.training.dataset.n_images;
-			cdf_img_cpu[i] = (1.0f - MIN_PMF) * cdf_img_cpu[i] * norm + MIN_PMF * (float)(i+1) / (float)m_nerf.training.dataset.n_images;
-		}
-		m_nerf.training.error_map.cdf_img.copy_from_host(cdf_img_cpu);
+        // Compute image CDF on the CPU. It's single-threaded anyway. No use parallelizing.
+        m_nerf.training.error_map.pmf_img_cpu.resize(m_nerf.training.error_map.cdf_img.size());
+        m_nerf.training.error_map.cdf_img.copy_to_host(m_nerf.training.error_map.pmf_img_cpu);
+        std::vector<float> cdf_img_cpu = m_nerf.training.error_map.pmf_img_cpu; // Copy unnormalized PDF into CDF buffer
+        float cum = 0;
+        for (float& f : cdf_img_cpu) {
+            cum += f;
+            f = cum;
+        }
+        float norm = 1.0f / cum;
+        for (size_t i = 0; i < cdf_img_cpu.size(); ++i) {
+            constexpr float MIN_PMF = 0.1f;
+            m_nerf.training.error_map.pmf_img_cpu[i] = (1.0f - MIN_PMF) * m_nerf.training.error_map.pmf_img_cpu[i] * norm + MIN_PMF / (float)m_nerf.training.dataset.n_images;
+            cdf_img_cpu[i] = (1.0f - MIN_PMF) * cdf_img_cpu[i] * norm + MIN_PMF * (float)(i+1) / (float)m_nerf.training.dataset.n_images;
+        }
+        m_nerf.training.error_map.cdf_img.copy_from_host(cdf_img_cpu);
 
-		// Reset counters and decrease update rate.
-		m_nerf.training.n_steps_since_error_map_update = 0;
-		m_nerf.training.n_rays_since_error_map_update = 0;
-		m_nerf.training.error_map.is_cdf_valid = true;
+        // Reset counters and decrease update rate.
+        m_nerf.training.n_steps_since_error_map_update = 0;
+        m_nerf.training.n_rays_since_error_map_update = 0;
+        m_nerf.training.error_map.is_cdf_valid = true;
 
-		m_nerf.training.n_steps_between_error_map_updates = (uint32_t)(m_nerf.training.n_steps_between_error_map_updates * 1.5f);
-	}
+        m_nerf.training.n_steps_between_error_map_updates = (uint32_t)(m_nerf.training.n_steps_between_error_map_updates * 1.5f);
+    }
 
-	// Get extrinsics gradients
-	m_nerf.training.n_steps_since_cam_update += 1;
+    // Get extrinsics gradients.
+    m_nerf.training.n_steps_since_cam_update += 1;
 
-	if (train_extra_dims) {
-		std::vector<float> extra_dims_gradient(m_nerf.training.extra_dims_gradient_gpu.size());
-		m_nerf.training.extra_dims_gradient_gpu.copy_to_host(extra_dims_gradient);
+    if (train_extra_dims) {
+        std::vector<float> extra_dims_gradient(m_nerf.training.extra_dims_gradient_gpu.size());
+        m_nerf.training.extra_dims_gradient_gpu.copy_to_host(extra_dims_gradient);
 
-		// Optimization step
-		for (uint32_t i = 0; i < m_nerf.training.n_images_for_training; ++i) {
-			std::vector<float> gradient(n_extra_dims);
-			for (uint32_t j = 0; j < n_extra_dims; ++j) {
-				gradient[j] = extra_dims_gradient[i * n_extra_dims + j] / LOSS_SCALE;
-			}
+        // Optimization step
+        for (uint32_t i = 0; i < m_nerf.training.n_images_for_training; ++i) {
+            std::vector<float> gradient(n_extra_dims);
+            for (uint32_t j = 0; j < n_extra_dims; ++j) {
+                gradient[j] = extra_dims_gradient[i * n_extra_dims + j] / LOSS_SCALE;
+            }
 
-			//float l2_reg = 1e-4f;
-			//gradient += m_nerf.training.extra_dims_opt[i].variable() * l2_reg;
+            //float l2_reg = 1e-4f;
+            //gradient += m_nerf.training.extra_dims_opt[i].variable() * l2_reg;
 
-			m_nerf.training.extra_dims_opt[i].set_learning_rate(m_optimizer->learning_rate());
-			m_nerf.training.extra_dims_opt[i].step(gradient);
-		}
+            m_nerf.training.extra_dims_opt[i].set_learning_rate(m_optimizer->learning_rate());
+            m_nerf.training.extra_dims_opt[i].step(gradient);
+        }
 
-		m_nerf.training.update_extra_dims();
-	}
+        m_nerf.training.update_extra_dims();
+    }
 
-	bool train_camera = m_nerf.training.optimize_extrinsics || m_nerf.training.optimize_distortion || m_nerf.training.optimize_focal_length || m_nerf.training.optimize_exposure;
-	if (train_camera && m_nerf.training.n_steps_since_cam_update >= m_nerf.training.n_steps_between_cam_updates) {
-		float per_camera_loss_scale = (float)m_nerf.training.n_images_for_training / LOSS_SCALE / (float)m_nerf.training.n_steps_between_cam_updates;
+    bool train_camera = m_nerf.training.optimize_extrinsics ||
+                        m_nerf.training.optimize_distortion ||
+                        m_nerf.training.optimize_focal_length ||
+                        m_nerf.training.optimize_exposure;
+    if (train_camera && m_nerf.training.n_steps_since_cam_update >=
+                        m_nerf.training.n_steps_between_cam_updates) {
+        float per_camera_loss_scale = (float)m_nerf.training.n_images_for_training / LOSS_SCALE / (float)m_nerf.training.n_steps_between_cam_updates;
 
-		if (m_nerf.training.optimize_extrinsics) {
-			CUDA_CHECK_THROW(cudaMemcpyAsync(m_nerf.training.cam_pos_gradient.data(), m_nerf.training.cam_pos_gradient_gpu.data(), m_nerf.training.cam_pos_gradient_gpu.get_bytes(), cudaMemcpyDeviceToHost, stream));
-			CUDA_CHECK_THROW(cudaMemcpyAsync(m_nerf.training.cam_rot_gradient.data(), m_nerf.training.cam_rot_gradient_gpu.data(), m_nerf.training.cam_rot_gradient_gpu.get_bytes(), cudaMemcpyDeviceToHost, stream));
+        if (m_nerf.training.optimize_extrinsics) {
+            CUDA_CHECK_THROW(cudaMemcpyAsync(m_nerf.training.cam_pos_gradient.data(), m_nerf.training.cam_pos_gradient_gpu.data(), m_nerf.training.cam_pos_gradient_gpu.get_bytes(), cudaMemcpyDeviceToHost, stream));
+            CUDA_CHECK_THROW(cudaMemcpyAsync(m_nerf.training.cam_rot_gradient.data(), m_nerf.training.cam_rot_gradient_gpu.data(), m_nerf.training.cam_rot_gradient_gpu.get_bytes(), cudaMemcpyDeviceToHost, stream));
 
-			CUDA_CHECK_THROW(cudaStreamSynchronize(stream));
+            CUDA_CHECK_THROW(cudaStreamSynchronize(stream));
 
-			// Optimization step
-			for (uint32_t i = 0; i < m_nerf.training.n_images_for_training; ++i) {
-				vec3 pos_gradient = m_nerf.training.cam_pos_gradient[i] * per_camera_loss_scale;
-				vec3 rot_gradient = m_nerf.training.cam_rot_gradient[i] * per_camera_loss_scale;
+            // Optimization step
+            for (uint32_t i = 0; i < m_nerf.training.n_images_for_training; ++i) {
+                vec3 pos_gradient = m_nerf.training.cam_pos_gradient[i] * per_camera_loss_scale;
+                vec3 rot_gradient = m_nerf.training.cam_rot_gradient[i] * per_camera_loss_scale;
 
-				float l2_reg = m_nerf.training.extrinsic_l2_reg;
-				pos_gradient += m_nerf.training.cam_pos_offset[i].variable() * l2_reg;
-				rot_gradient += m_nerf.training.cam_rot_offset[i].variable() * l2_reg;
+                float l2_reg = m_nerf.training.extrinsic_l2_reg;
+                pos_gradient += m_nerf.training.cam_pos_offset[i].variable() * l2_reg;
+                rot_gradient += m_nerf.training.cam_rot_offset[i].variable() * l2_reg;
 
-				m_nerf.training.cam_pos_offset[i].set_learning_rate(std::max(m_nerf.training.extrinsic_learning_rate * std::pow(0.33f, (float)(m_nerf.training.cam_pos_offset[i].step() / 128)), m_optimizer->learning_rate()/1000.0f));
-				m_nerf.training.cam_rot_offset[i].set_learning_rate(std::max(m_nerf.training.extrinsic_learning_rate * std::pow(0.33f, (float)(m_nerf.training.cam_rot_offset[i].step() / 128)), m_optimizer->learning_rate()/1000.0f));
+                m_nerf.training.cam_pos_offset[i].set_learning_rate(std::max(m_nerf.training.extrinsic_learning_rate * std::pow(0.33f, (float)(m_nerf.training.cam_pos_offset[i].step() / 128)), m_optimizer->learning_rate()/1000.0f));
+                m_nerf.training.cam_rot_offset[i].set_learning_rate(std::max(m_nerf.training.extrinsic_learning_rate * std::pow(0.33f, (float)(m_nerf.training.cam_rot_offset[i].step() / 128)), m_optimizer->learning_rate()/1000.0f));
 
-				m_nerf.training.cam_pos_offset[i].step(pos_gradient);
-				m_nerf.training.cam_rot_offset[i].step(rot_gradient);
-			}
+                m_nerf.training.cam_pos_offset[i].step(pos_gradient);
+                m_nerf.training.cam_rot_offset[i].step(rot_gradient);
+            }
 
-			m_nerf.training.update_transforms();
-		}
+            m_nerf.training.update_transforms();
+        }
 
-		if (m_nerf.training.optimize_distortion) {
-			linear_kernel(safe_divide, 0, stream,
-				m_distortion.map->n_params(),
-				m_distortion.map->gradients(),
-				m_distortion.map->gradient_weights()
-			);
-			m_distortion.trainer->optimizer_step(stream, LOSS_SCALE*(float)m_nerf.training.n_steps_between_cam_updates);
-		}
+        if (m_nerf.training.optimize_distortion) {
+            linear_kernel(safe_divide, 0, stream,
+                m_distortion.map->n_params(),
+                m_distortion.map->gradients(),
+                m_distortion.map->gradient_weights()
+            );
+            m_distortion.trainer->optimizer_step(stream, LOSS_SCALE*(float)m_nerf.training.n_steps_between_cam_updates);
+        }
 
-		if (m_nerf.training.optimize_focal_length) {
-			CUDA_CHECK_THROW(cudaMemcpyAsync(&m_nerf.training.cam_focal_length_gradient, m_nerf.training.cam_focal_length_gradient_gpu.data(), m_nerf.training.cam_focal_length_gradient_gpu.get_bytes(), cudaMemcpyDeviceToHost, stream));
-			CUDA_CHECK_THROW(cudaStreamSynchronize(stream));
-			vec2 focal_length_gradient = m_nerf.training.cam_focal_length_gradient * per_camera_loss_scale;
-			float l2_reg = m_nerf.training.intrinsic_l2_reg;
-			focal_length_gradient += m_nerf.training.cam_focal_length_offset.variable() * l2_reg;
-			m_nerf.training.cam_focal_length_offset.set_learning_rate(std::max(1e-3f * std::pow(0.33f, (float)(m_nerf.training.cam_focal_length_offset.step() / 128)),m_optimizer->learning_rate() / 1000.0f));
-			m_nerf.training.cam_focal_length_offset.step(focal_length_gradient);
-			m_nerf.training.dataset.update_metadata();
-		}
+        if (m_nerf.training.optimize_focal_length) {
+            CUDA_CHECK_THROW(cudaMemcpyAsync(&m_nerf.training.cam_focal_length_gradient, m_nerf.training.cam_focal_length_gradient_gpu.data(), m_nerf.training.cam_focal_length_gradient_gpu.get_bytes(), cudaMemcpyDeviceToHost, stream));
+            CUDA_CHECK_THROW(cudaStreamSynchronize(stream));
+            vec2 focal_length_gradient = m_nerf.training.cam_focal_length_gradient * per_camera_loss_scale;
+            float l2_reg = m_nerf.training.intrinsic_l2_reg;
+            focal_length_gradient += m_nerf.training.cam_focal_length_offset.variable() * l2_reg;
+            m_nerf.training.cam_focal_length_offset.set_learning_rate(std::max(1e-3f * std::pow(0.33f, (float)(m_nerf.training.cam_focal_length_offset.step() / 128)),m_optimizer->learning_rate() / 1000.0f));
+            m_nerf.training.cam_focal_length_offset.step(focal_length_gradient);
+            m_nerf.training.dataset.update_metadata();
+        }
 
-		if (m_nerf.training.optimize_exposure) {
-			CUDA_CHECK_THROW(cudaMemcpyAsync(m_nerf.training.cam_exposure_gradient.data(), m_nerf.training.cam_exposure_gradient_gpu.data(), m_nerf.training.cam_exposure_gradient_gpu.get_bytes(), cudaMemcpyDeviceToHost, stream));
+        if (m_nerf.training.optimize_exposure) {
+            CUDA_CHECK_THROW(cudaMemcpyAsync(m_nerf.training.cam_exposure_gradient.data(), m_nerf.training.cam_exposure_gradient_gpu.data(), m_nerf.training.cam_exposure_gradient_gpu.get_bytes(), cudaMemcpyDeviceToHost, stream));
 
-			vec3 mean_exposure = vec3(0.0f);
+            vec3 mean_exposure = vec3(0.0f);
 
-			// Optimization step
-			for (uint32_t i = 0; i < m_nerf.training.n_images_for_training; ++i) {
-				vec3 gradient = m_nerf.training.cam_exposure_gradient[i] * per_camera_loss_scale;
+            // Optimization step
+            for (uint32_t i = 0; i < m_nerf.training.n_images_for_training; ++i) {
+                vec3 gradient = m_nerf.training.cam_exposure_gradient[i] * per_camera_loss_scale;
 
-				float l2_reg = m_nerf.training.exposure_l2_reg;
-				gradient += m_nerf.training.cam_exposure[i].variable() * l2_reg;
+                float l2_reg = m_nerf.training.exposure_l2_reg;
+                gradient += m_nerf.training.cam_exposure[i].variable() * l2_reg;
 
-				m_nerf.training.cam_exposure[i].set_learning_rate(m_optimizer->learning_rate());
-				m_nerf.training.cam_exposure[i].step(gradient);
+                m_nerf.training.cam_exposure[i].set_learning_rate(m_optimizer->learning_rate());
+                m_nerf.training.cam_exposure[i].step(gradient);
 
-				mean_exposure += m_nerf.training.cam_exposure[i].variable();
-			}
+                mean_exposure += m_nerf.training.cam_exposure[i].variable();
+            }
 
-			mean_exposure /= m_nerf.training.n_images_for_training;
+            mean_exposure /= m_nerf.training.n_images_for_training;
 
-			// Renormalize
-			std::vector<vec3> cam_exposures(m_nerf.training.n_images_for_training);
-			for (uint32_t i = 0; i < m_nerf.training.n_images_for_training; ++i) {
-				cam_exposures[i] = m_nerf.training.cam_exposure[i].variable() -= mean_exposure;
-			}
+            // Renormalize
+            std::vector<vec3> cam_exposures(m_nerf.training.n_images_for_training);
+            for (uint32_t i = 0; i < m_nerf.training.n_images_for_training; ++i) {
+                cam_exposures[i] = m_nerf.training.cam_exposure[i].variable() -= mean_exposure;
+            }
 
-			CUDA_CHECK_THROW(cudaMemcpyAsync(m_nerf.training.cam_exposure_gpu.data(), cam_exposures.data(), m_nerf.training.n_images_for_training * sizeof(vec3), cudaMemcpyHostToDevice, stream));
-		}
+            CUDA_CHECK_THROW(cudaMemcpyAsync(m_nerf.training.cam_exposure_gpu.data(), cam_exposures.data(), m_nerf.training.n_images_for_training * sizeof(vec3), cudaMemcpyHostToDevice, stream));
+        }
 
-		m_nerf.training.n_steps_since_cam_update = 0;
-	}
+        m_nerf.training.n_steps_since_cam_update = 0;
+    }
 }
 
-void Testbed::train_nerf_step(uint32_t target_batch_size, Testbed::NerfCounters& counters, cudaStream_t stream) {
+/**
+ * Main NeRF train step.
+ */
+void Testbed::train_nerf_step(uint32_t target_batch_size,
+                              Testbed::NerfCounters& counters,
+                              cudaStream_t stream) {
 	const uint32_t padded_output_width = m_network->padded_output_width();
-	const uint32_t max_samples = target_batch_size * 16; // Somewhat of a worst case
-	const uint32_t floats_per_coord = sizeof(NerfCoordinate) / sizeof(float) + m_nerf_network->n_extra_dims();
-	const uint32_t extra_stride = m_nerf_network->n_extra_dims() * sizeof(float); // extra stride on top of base NerfCoordinate struct
+    // Somewhat of a worst case.
+    const uint32_t max_samples = target_batch_size * 16;
+    const uint32_t floats_per_coord = sizeof(NerfCoordinate) / sizeof(float) +
+                                      m_nerf_network->n_extra_dims();
+    // Extra stride on top of base NerfCoordinate struct.
+    const uint32_t extra_stride = m_nerf_network->n_extra_dims() * sizeof(float);
 
 	GPUMemoryArena::Allocation alloc;
 	auto scratch = allocate_workspace_and_distribute<
 		uint32_t, // ray_indices
-		Ray, // rays
+        Ray,      // rays
 		uint32_t, // numsteps
-		float, // coords
-		float, // max_level
+        float,    // coords
+        float,    // max_level
 		network_precision_t, // mlp_out
 		network_precision_t, // dloss_dmlp_out
-		float, // coords_compacted
-		float, // coords_gradient
-		float, // max_level_compacted
+        float,   // coords_compacted
+        float,   // coords_gradient
+        float,   // max_level_compacted
 		uint32_t // ray_counter
 	>(
-		stream, &alloc,
+        stream,
+        &alloc,
 		counters.rays_per_batch,
 		counters.rays_per_batch,
 		counters.rays_per_batch * 2,
@@ -3218,23 +3347,25 @@ void Testbed::train_nerf_step(uint32_t target_batch_size, Testbed::NerfCounters&
 	);
 
 	// TODO: C++17 structured binding
-	uint32_t* ray_indices = std::get<0>(scratch);
-	Ray* rays_unnormalized = std::get<1>(scratch);
-	uint32_t* numsteps = std::get<2>(scratch);
-	float* coords = std::get<3>(scratch);
-	float* max_level = std::get<4>(scratch);
-	network_precision_t* mlp_out = std::get<5>(scratch);
+    uint32_t* ray_indices               = std::get<0>(scratch);
+    Ray* rays_unnormalized              = std::get<1>(scratch);
+    uint32_t* numsteps                  = std::get<2>(scratch);
+    float* coords                       = std::get<3>(scratch);
+    float* max_level                    = std::get<4>(scratch);
+    network_precision_t* mlp_out        = std::get<5>(scratch);
 	network_precision_t* dloss_dmlp_out = std::get<6>(scratch);
-	float* coords_compacted = std::get<7>(scratch);
-	float* coords_gradient = std::get<8>(scratch);
-	float* max_level_compacted = std::get<9>(scratch);
-	uint32_t* ray_counter = std::get<10>(scratch);
+    float* coords_compacted             = std::get<7>(scratch);
+    float* coords_gradient              = std::get<8>(scratch);
+    float* max_level_compacted          = std::get<9>(scratch);
+    uint32_t* ray_counter               = std::get<10>(scratch);
 
 	uint32_t max_inference;
 	if (counters.measured_batch_size_before_compaction == 0) {
-		counters.measured_batch_size_before_compaction = max_inference = max_samples;
+        counters.measured_batch_size_before_compaction = max_inference
+                                                       = max_samples;
 	} else {
-		max_inference = next_multiple(std::min(counters.measured_batch_size_before_compaction, max_samples), tcnn::batch_size_granularity);
+        max_inference = next_multiple(std::min(counters.measured_batch_size_before_compaction, max_samples),
+                                      tcnn::batch_size_granularity);
 	}
 
 	GPUMatrix<float> compacted_coords_matrix((float*)coords_compacted, floats_per_coord, target_batch_size);
@@ -3265,35 +3396,38 @@ void Testbed::train_nerf_step(uint32_t target_batch_size, Testbed::NerfCounters&
 	auto hg_enc = dynamic_cast<GridEncoding<network_precision_t>*>(m_encoding.get());
 
     linear_kernel(generate_training_samples_nerf, 0, stream,
-        counters.rays_per_batch,
-        m_aabb,
-        max_inference,
-        n_rays_total,
-        m_rng,
-        ray_counter,
-        counters.numsteps_counter.data(),
-        ray_indices,
-        rays_unnormalized,
-        numsteps,
-        PitchedPtr<NerfCoordinate>((NerfCoordinate*)coords, 1, 0, extra_stride),
-        m_nerf.training.n_images_for_training,
-        m_nerf.training.dataset.metadata_gpu.data(),
-        m_nerf.training.transforms_gpu.data(),
-        m_nerf.density_grid_bitfield.data(),
-        m_nerf.max_cascade,
-        m_max_level_rand_training,
-        max_level,
-        m_nerf.training.snap_to_pixel_centers,
-        m_nerf.training.train_envmap,
-        m_nerf.cone_angle_constant,
-        m_distortion.view(),
-        sample_focal_plane_proportional_to_error ? m_nerf.training.error_map.cdf_x_cond_y.data() : nullptr,
-        sample_focal_plane_proportional_to_error ? m_nerf.training.error_map.cdf_y.data() : nullptr,
-        sample_image_proportional_to_error ? m_nerf.training.error_map.cdf_img.data() : nullptr,
-        m_nerf.training.error_map.cdf_resolution,
-        m_nerf.training.extra_dims_gpu.data(),
-        m_nerf_network->n_extra_dims()
-    );
+                  counters.rays_per_batch,
+                  m_aabb,
+                  max_inference,
+                  n_rays_total,
+                  m_rng,
+                  ray_counter,
+                  counters.numsteps_counter.data(),
+                  ray_indices,
+                  rays_unnormalized,
+                  numsteps,
+                  PitchedPtr<NerfCoordinate>((NerfCoordinate*)coords, 1, 0,
+                                             extra_stride),
+                  m_nerf.training.n_images_for_training,
+                  m_nerf.training.dataset.metadata_gpu.data(),
+                  m_nerf.training.transforms_gpu.data(),
+                  m_nerf.density_grid_bitfield.data(),
+                  m_nerf.max_cascade,
+                  m_max_level_rand_training,
+                  max_level,
+                  m_nerf.training.snap_to_pixel_centers,
+                  m_nerf.training.train_envmap,
+                  m_nerf.cone_angle_constant,
+                  m_distortion.view(),
+                  sample_focal_plane_proportional_to_error ?
+                      m_nerf.training.error_map.cdf_x_cond_y.data() : nullptr,
+                  sample_focal_plane_proportional_to_error ?
+                      m_nerf.training.error_map.cdf_y.data() : nullptr,
+                  sample_image_proportional_to_error ?
+                      m_nerf.training.error_map.cdf_img.data() : nullptr,
+                  m_nerf.training.error_map.cdf_resolution,
+                  m_nerf.training.extra_dims_gpu.data(),
+                  m_nerf_network->n_extra_dims());
 
     if (hg_enc) {
         hg_enc->set_max_level_gpu(m_max_level_rand_training ? max_level : nullptr);
@@ -3442,7 +3576,7 @@ void Testbed::training_prep_nerf(uint32_t batch_size, cudaStream_t stream) {
 	}
 
 	float alpha = m_nerf.training.density_grid_decay;
-	uint32_t n_cascades = m_nerf.max_cascade+1;
+    uint32_t n_cascades = m_nerf.max_cascade + 1;
 
 	if (m_training_step < 256) {
         update_density_grid_nerf(alpha, NERF_GRID_N_CELLS() * n_cascades, 0,
@@ -3623,31 +3757,89 @@ int Testbed::marching_cubes(ivec3 res3d, const BoundingBox& aabb,
 		thresh = m_mesh.thresh;
 	}
 
-	GPUMemory<float> density = get_density_on_grid(res3d, aabb, render_aabb_to_local);
-	marching_cubes_gpu(m_stream.get(), aabb, render_aabb_to_local, res3d, thresh, density, m_mesh.verts, m_mesh.indices);
+//	GPUMemory<float> density = get_density_on_grid(res3d, aabb, render_aabb_to_local);
+//	marching_cubes_gpu(m_stream.get(), aabb, render_aabb_to_local, res3d, thresh, density, m_mesh.verts, m_mesh.indices);
+
+
+    std::string inputfile = "/home/yblin/Documents/GitHub/instant-ngp/data/nerf/lego/lego.obj";
+    tinyobj::ObjReaderConfig reader_config;
+
+    tinyobj::ObjReader reader;
+    if (!reader.ParseFromFile(inputfile)) {
+      if (!reader.Error().empty()) {
+          std::cerr << "TinyObjReader: " << reader.Error();
+      }
+      exit(1);
+    }
+    auto& attrib = reader.GetAttrib();
+    auto& shapes = reader.GetShapes();
+
+    // Loop over shapes
+    std::vector<vec3> verts, colors;
+    std::vector<uint32_t> indices;
+    for (size_t s = 0; s < shapes.size(); s++) {
+      // Loop over faces(polygon)
+      size_t index_offset = 0;
+      for (size_t f = 0; f < shapes[s].mesh.num_face_vertices.size(); f++) {
+        size_t fv = size_t(shapes[s].mesh.num_face_vertices[f]);
+
+        // Loop over vertices in the face.
+        for (size_t v = 0; v < fv; v++) {
+          // access to vertex
+          tinyobj::index_t idx = shapes[s].mesh.indices[index_offset + v];
+          indices.push_back(idx.vertex_index);
+        }
+        index_offset += fv;
+      }
+    }
+
+    mat4 view2world = m_smoothed_camera;
+    mat4 world2view = inverse(view2world);
+    auto focal = calc_focal_length(ivec2(1), m_relative_focal_length, m_fov_axis, m_zoom);
+    float zscale = 1.0f / focal[m_fov_axis];
+
+    tlog::info() << zscale;
+
+    for (size_t i = 0; 3 * i + 2 < attrib.vertices.size(); i += 3) {
+        tinyobj::real_t vx = attrib.vertices[3 * i];
+        tinyobj::real_t vy = attrib.vertices[3 * i + 1];
+        tinyobj::real_t vz = attrib.vertices[3 * i + 2];
+        vec4 v(vx, vy, vz, 1.0);
+        verts.emplace_back(v.x, v.y, v.z);
+        colors.emplace_back(1.0, 1.0, 1.0);
+    }
+
+    m_mesh.verts.resize(verts.size());
+    m_mesh.verts.copy_from_host(verts);
+    m_mesh.indices.resize(indices.size());
+    m_mesh.indices.copy_from_host(indices);
+    m_mesh.vert_colors.resize(colors.size());
+    m_mesh.vert_colors.copy_from_host(colors);
 
 	uint32_t n_verts = (uint32_t)m_mesh.verts.size();
-	m_mesh.verts_gradient.resize(n_verts);
+    tlog::info() << verts.size() << " " << n_verts;
+    tlog::info() << indices.size();
+//	m_mesh.verts_gradient.resize(n_verts);
 
-	m_mesh.trainable_verts = std::make_shared<TrainableBuffer<3, 1, float>>(std::array<int, 1>{{(int)n_verts}});
-	m_mesh.verts_gradient.copy_from_device(m_mesh.verts); // Make sure the vertices don't get destroyed in the initialization
+//	m_mesh.trainable_verts = std::make_shared<TrainableBuffer<3, 1, float>>(std::array<int, 1>{{(int)n_verts}});
+//	m_mesh.verts_gradient.copy_from_device(m_mesh.verts); // Make sure the vertices don't get destroyed in the initialization
 
-	pcg32 rnd{m_seed};
-	m_mesh.trainable_verts->initialize_params(rnd, (float*)m_mesh.verts.data());
-	m_mesh.trainable_verts->set_params((float*)m_mesh.verts.data(), (float*)m_mesh.verts.data(), (float*)m_mesh.verts_gradient.data());
-	m_mesh.verts.copy_from_device(m_mesh.verts_gradient);
+//	pcg32 rnd{m_seed};
+//	m_mesh.trainable_verts->initialize_params(rnd, (float*)m_mesh.verts.data());
+//	m_mesh.trainable_verts->set_params((float*)m_mesh.verts.data(), (float*)m_mesh.verts.data(), (float*)m_mesh.verts_gradient.data());
+//	m_mesh.verts.copy_from_device(m_mesh.verts_gradient);
 
-	m_mesh.verts_optimizer.reset(create_optimizer<float>({
-		{"otype", "Adam"},
-		{"learning_rate", 1e-4},
-		{"beta1", 0.9f},
-		{"beta2", 0.99f},
-	}));
+//	m_mesh.verts_optimizer.reset(create_optimizer<float>({
+//		{"otype", "Adam"},
+//		{"learning_rate", 1e-4},
+//		{"beta1", 0.9f},
+//		{"beta2", 0.99f},
+//	}));
 
-	m_mesh.verts_optimizer->allocate(m_mesh.trainable_verts);
+//	m_mesh.verts_optimizer->allocate(m_mesh.trainable_verts);
 
-	compute_mesh_1ring(m_mesh.verts, m_mesh.indices, m_mesh.verts_smoothed, m_mesh.vert_normals);
-	compute_mesh_vertex_colors();
+//	compute_mesh_1ring(m_mesh.verts, m_mesh.indices, m_mesh.verts_smoothed, m_mesh.vert_normals);
+//	compute_mesh_vertex_colors();
 
 	return (int)(m_mesh.indices.size()/3);
 }

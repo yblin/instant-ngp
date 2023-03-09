@@ -975,7 +975,7 @@ void Testbed::imgui() {
 		ImGui::Text("Steps: %d, Loss: %0.6f (%0.2f dB), Elapsed: %.1fs", m_training_step, m_loss_scalar.ema_val(), linear_to_db(m_loss_scalar.ema_val()), elapsed_training);
 		ImGui::PlotLines("loss graph", m_loss_graph.data(), std::min(m_loss_graph_samples, m_loss_graph.size()), (m_loss_graph_samples < m_loss_graph.size()) ? 0 : (m_loss_graph_samples % m_loss_graph.size()), 0, FLT_MAX, FLT_MAX, ImVec2(0, 50.f));
 
-		if (m_testbed_mode == ETestbedMode::Nerf && ImGui::TreeNode("NeRF training options")) {
+        if (m_testbed_mode == ETestbedMode::Nerf && ImGui::TreeNode("NeRF training options")) {
 			ImGui::Checkbox("Random bg color", &m_nerf.training.random_bg_color);
 			ImGui::SameLine();
 			ImGui::Checkbox("Snap to pixel centers", &m_nerf.training.snap_to_pixel_centers);
@@ -3278,14 +3278,12 @@ void Testbed::reset_network(bool clear_density_grid) {
 			encoding_config["per_level_scale"] = m_per_level_scale;
 		}
 
-		tlog::info()
-			<< "GridEncoding: "
-			<< " Nmin=" << m_base_grid_resolution
-			<< " b=" << m_per_level_scale
-			<< " F=" << m_n_features_per_level
-			<< " T=2^" << log2_hashmap_size
-			<< " L=" << m_n_levels
-			;
+        tlog::info() << "GridEncoding: "
+                     << " Nmin=" << m_base_grid_resolution
+                     << " b=" << m_per_level_scale
+                     << " F=" << m_n_features_per_level
+                     << " T=2^" << log2_hashmap_size
+                     << " L=" << m_n_levels;
 	}
 
 	m_loss.reset(create_loss<precision_t>(loss_config));
@@ -3325,23 +3323,21 @@ void Testbed::reset_network(bool clear_density_grid) {
 		m_encoding = m_nerf_network->pos_encoding();
 		n_encoding_params = m_encoding->n_params() + m_nerf_network->dir_encoding()->n_params();
 
-		tlog::info()
-			<< "Density model: " << dims.n_pos
-			<< "--[" << std::string(encoding_config["otype"])
-			<< "]-->" << m_nerf_network->pos_encoding()->padded_output_width()
-			<< "--[" << std::string(network_config["otype"])
-			<< "(neurons=" << (int)network_config["n_neurons"] << ",layers=" << ((int)network_config["n_hidden_layers"]+2) << ")"
-			<< "]-->" << 1
-			;
+        tlog::info() << "Density model: " << dims.n_pos
+                     << "--[" << std::string(encoding_config["otype"])
+                     << "]-->" << m_nerf_network->pos_encoding()->padded_output_width()
+                     << "--[" << std::string(network_config["otype"])
+                     << "(neurons=" << (int)network_config["n_neurons"]
+                     << ",layers=" << ((int)network_config["n_hidden_layers"]+2) << ")"
+                     << "]-->" << 1;
 
-		tlog::info()
-			<< "Color model:   " << n_dir_dims
-			<< "--[" << std::string(dir_encoding_config["otype"])
-			<< "]-->" << m_nerf_network->dir_encoding()->padded_output_width() << "+" << network_config.value("n_output_dims", 16u)
-			<< "--[" << std::string(rgb_network_config["otype"])
-			<< "(neurons=" << (int)rgb_network_config["n_neurons"] << ",layers=" << ((int)rgb_network_config["n_hidden_layers"]+2) << ")"
-			<< "]-->" << 3
-			;
+        tlog::info() << "Color model:   " << n_dir_dims
+                     << "--[" << std::string(dir_encoding_config["otype"])
+                     << "]-->" << m_nerf_network->dir_encoding()->padded_output_width() << "+" << network_config.value("n_output_dims", 16u)
+                     << "--[" << std::string(rgb_network_config["otype"])
+                     << "(neurons=" << (int)rgb_network_config["n_neurons"]
+                     << ",layers=" << ((int)rgb_network_config["n_hidden_layers"]+2) << ")"
+                     << "]-->" << 3;
 
 
 		// Create distortion map model
@@ -3395,13 +3391,12 @@ void Testbed::reset_network(bool clear_density_grid) {
 
 		n_encoding_params = m_encoding->n_params();
 
-		tlog::info()
-			<< "Model:         " << dims.n_input
-			<< "--[" << std::string(encoding_config["otype"])
-			<< "]-->" << m_encoding->padded_output_width()
-			<< "--[" << std::string(network_config["otype"])
-			<< "(neurons=" << (int)network_config["n_neurons"] << ",layers=" << ((int)network_config["n_hidden_layers"]+2) << ")"
-			<< "]-->" << dims.n_output;
+        tlog::info() << "Model:         " << dims.n_input
+                     << "--[" << std::string(encoding_config["otype"])
+                     << "]-->" << m_encoding->padded_output_width()
+                     << "--[" << std::string(network_config["otype"])
+                     << "(neurons=" << (int)network_config["n_neurons"] << ",layers=" << ((int)network_config["n_hidden_layers"]+2) << ")"
+                     << "]-->" << dims.n_output;
 	}
 
 	size_t n_network_params = m_network->n_params() - n_encoding_params;
