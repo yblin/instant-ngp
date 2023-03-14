@@ -631,9 +631,7 @@ __global__ void generate_grid_samples_nerf_nonuniform(
 
     // Select a grid cell that has density.
     uint32_t idx;
-    // I changed 10 to 30 here.
-    int j = 0;
-    for (j = 0; j < 30; ++j) {
+    for (int j = 0; j < 10; ++j) {
         idx = ((i + step * n_elements) * 56924617 + j * 19349663 + 96925573) %
               NERF_GRID_N_CELLS();
         idx += level * NERF_GRID_N_CELLS();
@@ -641,7 +639,6 @@ __global__ void generate_grid_samples_nerf_nonuniform(
             break;
         }
     }
-    if (j == 30) return;
 
     // Random position within that cell.
     uint32_t pos_idx = idx % NERF_GRID_N_CELLS();
