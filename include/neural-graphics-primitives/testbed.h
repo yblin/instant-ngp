@@ -368,6 +368,7 @@ public:
     void create_empty_nerf_dataset(size_t n_images, int aabb_scale = 1, bool is_hdr = false);
     void load_nerf(const fs::path& data_path);
     void load_nerf_post();
+    void load_mesh_for_density_grid(const fs::path& obj_path);
     void load_mesh(const fs::path& data_path);
     void set_exposure(float exposure) { m_exposure = exposure; }
     void set_max_level(float maxlevel);
@@ -572,7 +573,7 @@ public:
     float m_exposure = 0.f;
 
     ERenderMode m_render_mode = ERenderMode::Shade;
-    EMeshRenderMode m_mesh_render_mode = EMeshRenderMode::VertexColors;
+    EMeshRenderMode m_mesh_render_mode = EMeshRenderMode::Off;
 
     uint32_t m_seed = 1337;
 
@@ -1202,6 +1203,9 @@ public:
         }
     } m_distortion;
     std::shared_ptr<NerfNetwork<precision_t>> m_nerf_network;
+
+    // Precomputed density grid.
+    std::vector<float> m_precomputed_density_grid;
 };
 
 NGP_NAMESPACE_END

@@ -179,6 +179,7 @@ list(APPEND NGP_INCLUDE_DIRECTORIES
 	"dependencies/nanovdb"
 	"dependencies/NaturalSort"
 	"dependencies/tinylogger"
+        "dependencies/codelibrary"
 )
 
 find_package(OpenMP)

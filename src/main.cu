@@ -20,6 +20,8 @@
 
 #include <filesystem/path.h>
 
+#include "codelibrary/base/log.h"
+
 using namespace args;
 using namespace ngp;
 using namespace std;
@@ -28,6 +30,8 @@ using namespace tcnn;
 NGP_NAMESPACE_BEGIN
 
 int main_func(const std::vector<std::string>& arguments) {
+    LOG_ON(INFO);
+
 	ArgumentParser parser{
 		"Instant Neural Graphics Primitives\n"
 		"Version " NGP_VERSION,
