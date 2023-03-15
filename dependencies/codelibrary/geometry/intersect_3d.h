@@ -103,106 +103,6 @@ bool Intersect(const Plane3D<T>& plane, const Box3D<T>& box) {
     return Intersect(box, plane);
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// All Cross() functions are used to test weather two objects are cross
-// (excluding touch and contain).
-//
-// Exact construction requires high-precision computation, which can greatly
-// slow down the speed. In this library, we completely avoid such operations.
-////////////////////////////////////////////////////////////////////////////////
-/**
- * Inexact predication and construction.
- *
- * Exactly predicate whether two planes are cross is unnecessary in most cases.
- * Because it is very rare that two planes are strictly parallel.
- */
-template <typename T>
-bool Cross(const Plane3D<T>& plane1, const Plane3D<T>& plane2,
-           Line3D<T>* res) {
-    static_assert(std::is_floating_point<T>::value, "");
-
-    const Vector3D<T>& v1 = plane1.normal();
-    const Vector3D<T>& v2 = plane2.normal();
-    const Vector3D<T> u = CrossProduct(v1, v2);
-    T as[3] = { std::fabs(u.x), std::fabs(u.y), std::fabs(u.z) };
-
-    // First, determine the maximum absolute value of cross production.
-    int maxc = static_cast<int>(std::max_element(as + 0, as + 3) - as);
-
-    // Next, compute a point on the intersection line.
-    Point3D<T> p;
-    T d1 = -DotProduct(v1, plane1.point().ToVector());
-    T d2 = -DotProduct(v2, plane2.point().ToVector());
-
-    switch (maxc) {
-    case 0: // Intersected with plane x = 0.
-        p.x = 0;
-        p.y = (d2 * v1.z - d1 * v2.z) / u.x;
-        p.z = (d1 * v2.y - d2 * v1.y) / u.x;
-        break;
-    case 1: // Intersected with plane y = 0.
-        p.x = (d1 * v2.z - d2 * v1.z) / u.y;
-        p.y = 0;
-        p.z = (d2 * v1.x - d1 * v2.x) / u.y;
-        break;
-    case 2: // Intersected with plane z = 0.
-        p.x = (d2 * v1.y - d1 * v2.y) / u.z;
-        p.y = (d1 * v2.x - d2 * v1.x) / u.z;
-        p.z = 0;
-    }
-
-    if (res) *res = Line3D<T>(p, u);
-    return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
-}
-
-/**
- * Exact predication whether a line segment is cross with a plane determined by
- * three points.
- */
-template <typename T>
-bool Cross(const Point3D<T>& a, const Point3D<T>& b, const Point3D<T>& c,
-           const Segment3D<T>& seg) {
-    int o1 = Orientation(a, b, c, seg.lower_point());
-    if (o1 == 0) return false;
-    int o2 = Orientation(a, b, c, seg.upper_point());
-    if (o2 == 0) return false;
-    return o1 != o2;
-}
-
-/**
- * Inexact predication and construction.
- *
- * Exactly predicate whether a plane cross with a line is unnecessary in most
- * cases. Because it is very rare for a plane an a line to be strictly parallel.
- * If there is a real need, it is better to convert lines into long line
- * segments and then use the above function.
- */
-template <typename T>
-bool Cross(const Plane3D<T>& plane, const Line3D<T>& line,
-           Point3D<T>* res = nullptr) {
-    static_assert(std::is_floating_point<T>::value, "");
-
-    const Vector3D<T> w = plane.point() - line.point1();
-    const Vector3D<T> direction = line.point2() - line.point1();
-
-    T d = DotProduct(plane.normal(), direction);
-    T n = DotProduct(plane.normal(), w);
-    T t = n / d;
-    Point3D<T> p = line.point1() + t * line.direction();
-
-    if (std::isfinite(p.x) && std::isfinite(p.y)) {
-        if (res) *res = p;
-        return true;
-    }
-
-    return false;
-}
-template <typename T>
-bool Cross(const Line3D<T>& line, const Plane3D<T>& plane,
-           Point3D<T>* res = nullptr) {
-    return Cross(plane, line, res);
-}
-
 /**
  * Inexact predication.
  *
@@ -211,12 +111,13 @@ bool Cross(const Line3D<T>& line, const Plane3D<T>& plane,
  *  2005 courses. 2005. 8-es.
  */
 template <typename T>
-bool Cross(const Box3D<T>& box, const Triangle3D<T>& triangle) {
+bool Intersect(const Box3D<T>& box, const Triangle3D<T>& triangle) {
     static_assert(std::is_floating_point<T>::value, "");
 
+
     // First: test If the triangle is entirely inside the bounding box.
-    if (Intersect(box, triangle.vertices()[0]) &&
-        Intersect(box, triangle.vertices()[1]) &&
+    if (Intersect(box, triangle.vertices()[0]) ||
+        Intersect(box, triangle.vertices()[1]) ||
         Intersect(box, triangle.vertices()[2])) return true;
 
     // Convert AABB to center-extents form.
@@ -316,8 +217,108 @@ bool Cross(const Box3D<T>& box, const Triangle3D<T>& triangle) {
     return true;
 }
 template <typename T>
-bool Cross(const Triangle3D<T>& triangle, const Box3D<T>& box) {
-    return Cross(box, triangle);
+bool Intersect(const Triangle3D<T>& triangle, const Box3D<T>& box) {
+    return Intersect(box, triangle);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// All Cross() functions are used to test weather two objects are cross
+// (excluding touch and contain).
+//
+// Exact construction requires high-precision computation, which can greatly
+// slow down the speed. In this library, we completely avoid such operations.
+////////////////////////////////////////////////////////////////////////////////
+/**
+ * Inexact predication and construction.
+ *
+ * Exactly predicate whether two planes are cross is unnecessary in most cases.
+ * Because it is very rare that two planes are strictly parallel.
+ */
+template <typename T>
+bool Cross(const Plane3D<T>& plane1, const Plane3D<T>& plane2,
+           Line3D<T>* res) {
+    static_assert(std::is_floating_point<T>::value, "");
+
+    const Vector3D<T>& v1 = plane1.normal();
+    const Vector3D<T>& v2 = plane2.normal();
+    const Vector3D<T> u = CrossProduct(v1, v2);
+    T as[3] = { std::fabs(u.x), std::fabs(u.y), std::fabs(u.z) };
+
+    // First, determine the maximum absolute value of cross production.
+    int maxc = static_cast<int>(std::max_element(as + 0, as + 3) - as);
+
+    // Next, compute a point on the intersection line.
+    Point3D<T> p;
+    T d1 = -DotProduct(v1, plane1.point().ToVector());
+    T d2 = -DotProduct(v2, plane2.point().ToVector());
+
+    switch (maxc) {
+    case 0: // Intersected with plane x = 0.
+        p.x = 0;
+        p.y = (d2 * v1.z - d1 * v2.z) / u.x;
+        p.z = (d1 * v2.y - d2 * v1.y) / u.x;
+        break;
+    case 1: // Intersected with plane y = 0.
+        p.x = (d1 * v2.z - d2 * v1.z) / u.y;
+        p.y = 0;
+        p.z = (d2 * v1.x - d1 * v2.x) / u.y;
+        break;
+    case 2: // Intersected with plane z = 0.
+        p.x = (d2 * v1.y - d1 * v2.y) / u.z;
+        p.y = (d1 * v2.x - d2 * v1.x) / u.z;
+        p.z = 0;
+    }
+
+    if (res) *res = Line3D<T>(p, u);
+    return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
+}
+
+/**
+ * Exact predication whether a line segment is cross with a plane determined by
+ * three points.
+ */
+template <typename T>
+bool Cross(const Point3D<T>& a, const Point3D<T>& b, const Point3D<T>& c,
+           const Segment3D<T>& seg) {
+    int o1 = Orientation(a, b, c, seg.lower_point());
+    if (o1 == 0) return false;
+    int o2 = Orientation(a, b, c, seg.upper_point());
+    if (o2 == 0) return false;
+    return o1 != o2;
+}
+
+/**
+ * Inexact predication and construction.
+ *
+ * Exactly predicate whether a plane cross with a line is unnecessary in most
+ * cases. Because it is very rare for a plane an a line to be strictly parallel.
+ * If there is a real need, it is better to convert lines into long line
+ * segments and then use the above function.
+ */
+template <typename T>
+bool Cross(const Plane3D<T>& plane, const Line3D<T>& line,
+           Point3D<T>* res = nullptr) {
+    static_assert(std::is_floating_point<T>::value, "");
+
+    const Vector3D<T> w = plane.point() - line.point1();
+    const Vector3D<T> direction = line.point2() - line.point1();
+
+    T d = DotProduct(plane.normal(), direction);
+    T n = DotProduct(plane.normal(), w);
+    T t = n / d;
+    Point3D<T> p = line.point1() + t * line.direction();
+
+    if (std::isfinite(p.x) && std::isfinite(p.y)) {
+        if (res) *res = p;
+        return true;
+    }
+
+    return false;
+}
+template <typename T>
+bool Cross(const Line3D<T>& line, const Plane3D<T>& plane,
+           Point3D<T>* res = nullptr) {
+    return Cross(plane, line, res);
 }
 
 } // namespace geometry

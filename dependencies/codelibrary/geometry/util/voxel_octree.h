@@ -68,9 +68,9 @@ public:
                                       uint64_t(k);
                         if (hash.find(c) != hash.end()) continue;
 
-                        hash.insert(c);
                         box = GetVoxel(i, j, k);
-                        if (Cross(box, triangle)) {
+                        if (Intersect(box, triangle)) {
+                            hash.insert(c);
                             this->Insert(i, j, k, true);
                         }
                     }

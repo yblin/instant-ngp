@@ -2983,7 +2983,7 @@ void Testbed::load_mesh_for_density_grid(const fs::path& obj_path) {
     uint32_t n_elements = NERF_GRID_N_CELLS() * (m_nerf.max_cascade + 1);
     m_precomputed_density_grid.assign(n_elements, -1.0f);
 
-    const int gird_size = NERF_GRIDSIZE();
+    const int grid_size = NERF_GRIDSIZE();
 
     cl::FPoint3D p1, p2, p3;
     cl::FTriangle3D tri;
@@ -3004,21 +3004,18 @@ void Testbed::load_mesh_for_density_grid(const fs::path& obj_path) {
             float voxel_size = scalbnf(1.0f / NERF_GRIDSIZE(), i);
             float min = -0.5f * scalbnf(1.0f, i) + 0.5f;
 
-            int lx = tcnn::clamp(static_cast<int>((box.x_min() - min) / voxel_size), 0, gird_size - 1);
-            int ux = tcnn::clamp(static_cast<int>((box.x_max() - min) / voxel_size), 0, gird_size - 1);
-            int ly = tcnn::clamp(static_cast<int>((box.y_min() - min) / voxel_size), 0, gird_size - 1);
-            int uy = tcnn::clamp(static_cast<int>((box.y_max() - min) / voxel_size), 0, gird_size - 1);
-            int lz = tcnn::clamp(static_cast<int>((box.z_min() - min) / voxel_size), 0, gird_size - 1);
-            int uz = tcnn::clamp(static_cast<int>((box.z_max() - min) / voxel_size), 0, gird_size - 1);
+            int lx = tcnn::clamp(static_cast<int>((box.x_min() - min) / voxel_size), 0, grid_size - 1);
+            int ux = tcnn::clamp(static_cast<int>((box.x_max() - min) / voxel_size), 0, grid_size - 1);
+            int ly = tcnn::clamp(static_cast<int>((box.y_min() - min) / voxel_size), 0, grid_size - 1);
+            int uy = tcnn::clamp(static_cast<int>((box.y_max() - min) / voxel_size), 0, grid_size - 1);
+            int lz = tcnn::clamp(static_cast<int>((box.z_min() - min) / voxel_size), 0, grid_size - 1);
+            int uz = tcnn::clamp(static_cast<int>((box.z_max() - min) / voxel_size), 0, grid_size - 1);
             for (int x = lx; x <= ux; ++x) {
                 for (int y = ly; y <= uy; ++y) {
                     for (int z = lz; z <= uz; ++z) {
-
                         uint32_t c = (uint32_t(x) << 20) | (uint32_t(y) << 10) |
                                       uint32_t(z);
                         if (hash.find(c) != hash.end()) continue;
-
-                        hash.insert(c);
 
                         // Get voxel (x, y, z).
                         vec3 pos = (vec3{x, y, z} / (float)NERF_GRIDSIZE() -
@@ -3026,11 +3023,12 @@ void Testbed::load_mesh_for_density_grid(const fs::path& obj_path) {
                         cl::FBox3D box(pos.x, pos.x + voxel_size,
                                        pos.y, pos.y + voxel_size,
                                        pos.z, pos.z + voxel_size);
-                        if (cl::geometry::Cross(box, tri)) {
+                        if (cl::geometry::Intersect(box, tri)) {
                             uint32_t index = tcnn::morton3D(x, y, z);
                             m_precomputed_density_grid[i * NERF_GRID_N_CELLS() +
                                                        index] = 0.0f;
                             ++n_occluded_grids;
+                            hash.insert(c);
                         }
                     }
                 }
@@ -3050,10 +3048,6 @@ void Testbed::update_density_grid_nerf(
         cudaStream_t stream) {
     const uint32_t n_elements = NERF_GRID_N_CELLS() * (m_nerf.max_cascade + 1);
     m_nerf.density_grid.resize(n_elements);
-    if (m_precomputed_density_grid.size() == n_elements) {
-        m_nerf.density_grid.copy_from_host(m_precomputed_density_grid,
-                                           n_elements);
-    }
 
     const uint32_t n_density_grid_samples = n_uniform_density_grid_samples +
                                             n_nonuniform_density_grid_samples;
@@ -3086,7 +3080,10 @@ void Testbed::update_density_grid_nerf(
         // Only cull away empty regions where no camera is looking when the
         // cameras are actually meaningful.
         if (!m_nerf.training.dataset.has_rays) {
-            if (m_precomputed_density_grid.empty()) {
+            if (m_precomputed_density_grid.size() == n_elements) {
+                m_nerf.density_grid.copy_from_host(m_precomputed_density_grid,
+                                                   n_elements);
+            } else {
                 linear_kernel(mark_untrained_density_grid, 0, stream,
                               n_elements,
                               m_nerf.density_grid.data(),
