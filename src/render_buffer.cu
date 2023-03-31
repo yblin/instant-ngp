@@ -33,6 +33,8 @@
 
 #include <stb_image/stb_image.h>
 
+#include "codelibrary/base/log.h"
+
 using namespace tcnn;
 
 NGP_NAMESPACE_BEGIN

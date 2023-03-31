@@ -365,11 +365,11 @@ public:
     bool reprojection_available() { return m_dlss; }
     static ELossType string_to_loss_type(const std::string& str);
     void reset_network(bool clear_density_grid = true);
-    void create_empty_nerf_dataset(size_t n_images, int aabb_scale = 1, bool is_hdr = false);
     void load_nerf(const fs::path& data_path);
     void load_nerf_post();
     void load_mesh_for_density_grid(const fs::path& obj_path);
     void load_mesh(const fs::path& data_path);
+    void load_point_cloud_for_density_grid(const fs::path& path);
     void set_exposure(float exposure) { m_exposure = exposure; }
     void set_max_level(float maxlevel);
     void set_visualized_dim(int dim);

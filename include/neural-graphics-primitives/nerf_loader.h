@@ -116,21 +116,21 @@ struct NerfDataset {
 
 	mat4x3 nerf_matrix_to_ngp(const mat4x3& nerf_matrix, bool scale_columns = false) const {
 		mat4x3 result = nerf_matrix;
-		result[0] *= scale_columns ? scale : 1.f;
-		result[1] *= scale_columns ? -scale : -1.f;
-		result[2] *= scale_columns ? -scale : -1.f;
-		result[3] = result[3] * scale + offset;
+        result[0] *= scale_columns ? scale : 1.f;
+        result[1] *= scale_columns ? -scale : -1.f;
+        result[2] *= scale_columns ? -scale : -1.f;
+        result[3] = result[3] * scale + offset;
 
-		if (from_mitsuba) {
-			result[0] *= -1;
-			result[2] *= -1;
-		} else {
-			// Cycle axes xyz<-yzx
-			vec4 tmp = row(result, 0);
-			result = row(result, 0, row(result, 1));
-			result = row(result, 1, row(result, 2));
-			result = row(result, 2, tmp);
-		}
+        if (from_mitsuba) {
+            result[0] *= -1;
+            result[2] *= -1;
+        } else {
+            // Cycle axes xyz<-yzx
+            vec4 tmp = row(result, 0);
+            result = row(result, 0, row(result, 1));
+            result = row(result, 1, row(result, 2));
+            result = row(result, 2, tmp);
+        }
 
 		return result;
 	}
@@ -147,10 +147,10 @@ struct NerfDataset {
 			result = row(result, 2, row(result, 1));
 			result = row(result, 1, tmp);
 		}
-		result[0] *= scale_columns ?  1.f/scale :  1.f;
-		result[1] *= scale_columns ? -1.f/scale : -1.f;
-		result[2] *= scale_columns ? -1.f/scale : -1.f;
-		result[3] = (result[3] - offset) / scale;
+        result[0] *= scale_columns ?  1.f/scale :  1.f;
+        result[1] *= scale_columns ? -1.f/scale : -1.f;
+        result[2] *= scale_columns ? -1.f/scale : -1.f;
+        result[3] = (result[3] - offset) / scale;
 		return result;
 	}
 
@@ -185,6 +185,6 @@ struct NerfDataset {
 };
 
 NerfDataset load_nerf(const std::vector<fs::path>& jsonpaths, float sharpen_amount = 0.f);
-NerfDataset create_empty_nerf_dataset(size_t n_images, int aabb_scale = 1, bool is_hdr = false);
+NerfDataset load_street_nerf(const fs::path& data_path);
 
 NGP_NAMESPACE_END

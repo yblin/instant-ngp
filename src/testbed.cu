@@ -66,6 +66,8 @@
 #undef near
 #undef far
 
+#include "codelibrary/base/log.h"
+
 using namespace std::literals::chrono_literals;
 using namespace tcnn;
 
@@ -4502,7 +4504,7 @@ ScopeGuard Testbed::use_device(cudaStream_t stream, CudaRenderBuffer& render_buf
 	int active_device = cuda_device();
 	auto guard = device.device_guard();
 
-	size_t n_pixels = compMul(render_buffer.in_resolution());
+    size_t n_pixels = compMul(render_buffer.in_resolution());
 
 	GPUMemoryArena::Allocation alloc;
 	auto scratch = allocate_workspace_and_distribute<vec4, float>(device.stream(), &alloc, n_pixels, n_pixels);

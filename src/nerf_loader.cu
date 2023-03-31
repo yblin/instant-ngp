@@ -35,6 +35,11 @@
 #include <string>
 #include <vector>
 
+#include "codelibrary/base/array.h"
+#include "codelibrary/base/log.h"
+#include "codelibrary/string/string_split.h"
+#include "codelibrary/util/io/line_reader.h"
+
 using namespace tcnn;
 using namespace std::literals;
 
@@ -152,28 +157,6 @@ __global__ void compute_sharpness(ivec2 sharpness_resolution, ivec2 image_resolu
 	*sharpness_data = (variance_of_laplacian) ; // / max(0.00001f,tot_lum*tot_lum); // var / (tot+0.001f);
 }
 
-NerfDataset create_empty_nerf_dataset(size_t n_images, int aabb_scale, bool is_hdr) {
-	NerfDataset result{};
-	result.n_images = n_images;
-	result.sharpness_resolution = { 128, 72 };
-	result.sharpness_data.enlarge( result.sharpness_resolution.x * result.sharpness_resolution.y *  result.n_images );
-	result.xforms.resize(n_images);
-	result.metadata.resize(n_images);
-	result.pixelmemory.resize(n_images);
-	result.depthmemory.resize(n_images);
-	result.raymemory.resize(n_images);
-	result.scale = NERF_SCALE;
-	result.offset = {0.5f, 0.5f, 0.5f};
-	result.aabb_scale = aabb_scale;
-	result.is_hdr = is_hdr;
-	result.paths = std::vector<std::string>(n_images, "");
-	for (size_t i = 0; i < n_images; ++i) {
-		result.xforms[i].start = mat4x3(1.0f);
-		result.xforms[i].end = mat4x3(1.0f);
-	}
-	return result;
-}
-
 void read_lens(const nlohmann::json& json, Lens& lens, vec2& principal_point, vec4& rolling_shutter) {
 	ELensMode mode = ELensMode::Perspective;
 
@@ -272,9 +255,11 @@ bool read_focal_length(const nlohmann::json &json, vec2 &focal_length, const ive
 	return true;
 }
 
-NerfDataset load_nerf(const std::vector<fs::path>& jsonpaths, float sharpen_amount) {
+NerfDataset load_nerf(const std::vector<fs::path>& jsonpaths,
+                      float sharpen_amount) {
 	if (jsonpaths.empty()) {
-		throw std::runtime_error{"Cannot load NeRF data from an empty set of paths."};
+        throw std::runtime_error{"Cannot load NeRF data from an empty set of "
+                                 "paths."};
 	}
 
 	tlog::info() << "Loading NeRF dataset from";
@@ -282,7 +267,7 @@ NerfDataset load_nerf(const std::vector<fs::path>& jsonpaths, float sharpen_amou
 	NerfDataset result{};
 
 	std::ifstream f{native_string(jsonpaths.front())};
-	nlohmann::json transforms = nlohmann::json::parse(f, nullptr, true, true);
+    nlohmann::json transforms = nlohmann::json::parse(f, nullptr, true, true);
 
 	ThreadPool pool;
 
@@ -491,7 +476,7 @@ NerfDataset load_nerf(const std::vector<fs::path>& jsonpaths, float sharpen_amou
 
 		if (json.contains("aabb_scale")) {
 			result.aabb_scale = json["aabb_scale"];
-		}
+        }
 
 		if (json.contains("offset")) {
 			result.offset =
@@ -540,7 +525,6 @@ NerfDataset load_nerf(const std::vector<fs::path>& jsonpaths, float sharpen_amou
 				result.envmap_data = load_stbi_gpu(envmap_path, &result.envmap_resolution.x, &result.envmap_resolution.y);
 			}
 		}
-
 
 		if (json.contains("frames") && json["frames"].is_array()) pool.parallel_for_async<size_t>(0, json["frames"].size(), [&progress, &n_loaded, &result, &images, &json, &resolve_path, &supported_image_formats, base_path, image_idx, info, rolling_shutter, principal_point, lens, part_after_underscore, fix_premult, enable_depth_loading, enable_ray_loading](size_t i) {
 			size_t i_img = i + image_idx;
@@ -697,13 +681,12 @@ NerfDataset load_nerf(const std::vector<fs::path>& jsonpaths, float sharpen_amou
 			result.xforms[i_img].start = result.nerf_matrix_to_ngp(result.xforms[i_img].start);
 			result.xforms[i_img].end = result.nerf_matrix_to_ngp(result.xforms[i_img].end);
 
-			progress.update(++n_loaded);
+            progress.update(++n_loaded);
 		}, futures);
 
 		if (json.contains("frames")) {
 			image_idx += json["frames"].size();
 		}
-
 	}
 
 	wait_all(futures);
@@ -724,7 +707,7 @@ NerfDataset load_nerf(const std::vector<fs::path>& jsonpaths, float sharpen_amou
 	// copy / convert images to the GPU
 	for (uint32_t i = 0; i < result.n_images; ++i) {
 		const LoadedImageInfo& m = images[i];
-		result.set_training_image(i, m.res, m.pixels, m.depth_pixels, m.depth_scale * result.scale, m.image_data_on_gpu, m.image_type, EDepthDataType::UShort, sharpen_amount, m.white_transparent, m.black_transparent, m.mask_color, m.rays);
+        result.set_training_image(i, m.res, m.pixels, m.depth_pixels, m.depth_scale * result.scale, m.image_data_on_gpu, m.image_type, EDepthDataType::UShort, sharpen_amount, m.white_transparent, m.black_transparent, m.mask_color, m.rays);
 		CUDA_CHECK_THROW(cudaDeviceSynchronize());
 	}
 	CUDA_CHECK_THROW(cudaDeviceSynchronize());
@@ -739,6 +722,189 @@ NerfDataset load_nerf(const std::vector<fs::path>& jsonpaths, float sharpen_amou
 		free(images[i].depth_pixels);
 	}
 	return result;
+}
+
+/**
+ * Load NeRF from street view data.
+ */
+NerfDataset load_street_nerf(const fs::path& data_path) {
+    LOG(INFO) << "Loading NeRF street view dataset from" << data_path;
+
+    std::ifstream f{native_string(data_path / "config" / "setting.json")};
+    nlohmann::json setting = nlohmann::json::parse(f, nullptr, true, true);
+
+    struct LoadedImageInfo {
+        ivec2 res = ivec2(0);
+        bool image_data_on_gpu = false;
+        EImageDataType image_type = EImageDataType::None;
+        bool white_transparent = false;
+        bool black_transparent = false;
+        uint32_t mask_color = 0;
+        void *pixels = nullptr;
+        uint16_t *depth_pixels = nullptr;
+        Ray *rays = nullptr;
+        float depth_scale = -1.f;
+    };
+    std::vector<LoadedImageInfo> images;
+    NerfDataset result{};
+    ThreadPool pool;
+
+    cl::io::LineReader line_reader;
+    CHECK(line_reader.Open((data_path / "frame_pose.csv").str()));
+    cl::Array<std::string> parse;
+    bool first_line = true;
+    BoundingBox cam_aabb;
+
+    // Find the middle camera.
+    cl::Array<vec3> camera_poses;
+
+    result.from_mitsuba = false;
+    while (char* line = line_reader.ReadLine()) {
+        if (first_line) {
+            first_line = false;
+            continue;
+        }
+        cl::StringSplit(line, ',', &parse);
+        if (parse.empty()) continue;
+        if (parse[0][0] != '2' && parse[0][0] != '3') continue;
+        fs::path image_path = data_path / "images" / parse[0];
+        result.paths.emplace_back(image_path.str());
+
+        CHECK(parse.size() >= 21) << parse;
+
+        // Load image data.
+        LoadedImageInfo image{};
+        image.image_data_on_gpu = false;
+        int comp;
+        image.pixels = load_stbi(image_path, &image.res.x, &image.res.y, &comp,
+                                 4);
+        if (!image.pixels) {
+            CHECK(false) << "Could not open image file: "
+                         << stbi_failure_reason();
+        }
+        image.image_type = EImageDataType::Byte;
+        images.push_back(image);
+
+        // Load camera transformation matrices.
+        TrainingXForm xform;
+        int offset = 5;
+        for (int m = 0; m < 3; ++m) {
+            for (int n = 0; n < 4; ++n) {
+                xform.start[n][m] = std::stof(parse[m * 4 + n + offset]);
+                xform.end[n][m] = std::stof(parse[m * 4 + n + offset]);
+            }
+        }
+        // Enlarge camera AABB.
+        vec3 p(xform.start[3][0], xform.start[3][1], xform.start[3][2]);
+        camera_poses.push_back(p);
+        cam_aabb.enlarge(p);
+
+        result.xforms.push_back(xform);
+
+        // Load metadata.
+        TrainingImageMetadata metadata;
+        metadata.focal_length = vec2(std::stof(parse[1]), std::stof(parse[2]));
+        metadata.rolling_shutter = vec4(0.0f);
+        metadata.principal_point = vec2(std::stof(parse[3]) / image.res.x,
+                                        std::stof(parse[4]) / image.res.y);
+        metadata.lens = {};
+        result.metadata.push_back(metadata);
+    }
+    result.n_images = result.paths.size();
+
+    // The following data is not used now.
+    result.pixelmemory.resize(result.n_images);
+    result.depthmemory.resize(result.n_images);
+    result.raymemory.resize(result.n_images);
+
+    if (result.n_images == 0) {
+        CHECK(false) << "No training images were found for NeRF training!";
+    }
+
+    tlog::success() << "Loaded " << images.size() << " images.";
+    tlog::info() << "Original cam_aabb: " << cam_aabb;
+
+    if (setting.contains("scale")) {
+        result.scale = setting["scale"];
+    } else {
+        result.scale = 1.0f;
+    }
+
+    if (setting.contains("render_aabb")) {
+        // Map the given aabb of the form [[minx,miny,minz],[maxx,maxy,maxz]]
+        // via an isotropic scale and translate to fit in the (0,0,0)-(1,1,1)
+        // cube, with the given center at 0.5,0.5,0.5
+        const auto& aabb = setting["render_aabb"];
+        vec3 vmin(aabb[0][0], aabb[0][1], aabb[0][2]);
+        vec3 vmax(aabb[1][0], aabb[1][1], aabb[1][2]);
+        vec3 v = vmax - vmin;
+        float scale = std::max(std::max(v.x, v.y), v.z);
+        scale = std::max(0.000001f, scale);
+
+        result.scale = 1.0f / scale;
+        vec3 center = 0.5f * (vmin + vmax) * result.scale;
+        result.offset = vec3(0.5f) - center;
+    } else {
+        vec3 center = camera_poses[camera_poses.size() / 2] * result.scale;
+        result.offset = vec3(0.5f) - center;
+    }
+
+    if (setting.contains("aabb_scale")) {
+        result.aabb_scale = setting["aabb_scale"];
+    } else {
+        result.aabb_scale = 1;
+        while (result.scale > result.aabb_scale) {
+            result.aabb_scale <<= 1;
+        }
+    }
+
+    LOG(INFO) << "Scale: " << result.scale;
+    LOG(INFO) << "Offset: " << result.offset.x << " " << result.offset.y << " "
+              << result.offset.z;
+    LOG(INFO) << "AABB scale: " << result.aabb_scale;
+
+    // Convert NeRF matrix to NPG's form.
+    for (auto& xform : result.xforms) {
+        xform.start[1] *= -1.0f;
+        xform.start[2] *= -1.0f;
+        xform.start = result.nerf_matrix_to_ngp(xform.start);
+        xform.end[1] *= -1.0f;
+        xform.end[2] *= -1.0f;
+        xform.end = result.nerf_matrix_to_ngp(xform.end);
+    }
+
+    result.sharpness_resolution = { 128, 72 };
+    result.sharpness_data.enlarge(result.sharpness_resolution.x *
+                                  result.sharpness_resolution.y *
+                                  result.n_images);
+
+    // copy / convert images to the GPU.
+    for (uint32_t i = 0; i < result.n_images; ++i) {
+        const LoadedImageInfo& m = images[i];
+        result.set_training_image(i, m.res, m.pixels, m.depth_pixels,
+                                  m.depth_scale * result.scale,
+                                  m.image_data_on_gpu,
+                                  m.image_type,
+                                  EDepthDataType::UShort,
+                                  0.0f,
+                                  m.white_transparent,
+                                  m.black_transparent,
+                                  m.mask_color,
+                                  m.rays);
+        CUDA_CHECK_THROW(cudaDeviceSynchronize());
+    }
+    CUDA_CHECK_THROW(cudaDeviceSynchronize());
+    // free memory
+    for (uint32_t i = 0; i < result.n_images; ++i) {
+        if (images[i].image_data_on_gpu) {
+            CUDA_CHECK_THROW(cudaFree(images[i].pixels));
+        } else {
+            free(images[i].pixels);
+        }
+        free(images[i].rays);
+        free(images[i].depth_pixels);
+    }
+    return result;
 }
 
 void NerfDataset::set_training_image(int frame_idx, const ivec2& image_resolution, const void* pixels, const void* depth_pixels, float depth_scale, bool image_data_on_gpu, EImageDataType image_type, EDepthDataType depth_type, float sharpen_amount, bool white_transparent, bool black_transparent, uint32_t mask_color, const Ray *rays) {

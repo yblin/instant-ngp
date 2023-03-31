@@ -40,7 +40,9 @@
 
 #include <unordered_set>
 
+#include "codelibrary/base/clamp.h"
 #include "codelibrary/geometry/intersect_3d.h"
+#include "codelibrary/point_cloud/xyz_io.h"
 
 #ifdef copysign
 #undef copysign
@@ -478,6 +480,8 @@ __global__ void mark_untrained_density_grid(
         bool clear_visible_voxels) {
     const uint32_t i = threadIdx.x + blockIdx.x * blockDim.x;
     if (i >= n_elements) return;
+
+    if (grid_out[i] == -1.0f) return;
 
     uint32_t level = i / NERF_GRID_N_CELLS();
     uint32_t pos_idx = i % NERF_GRID_N_CELLS();
@@ -2531,7 +2535,6 @@ void Testbed::render_nerf(cudaStream_t stream,
     Lens lens = m_nerf.render_with_lens_distortion ? m_nerf.render_lens : Lens{};
 
     auto resolution = render_buffer.resolution;
-
     tracer.init_rays_from_camera(
         render_buffer.spp,
         nerf_network.padded_output_width(),
@@ -2799,15 +2802,6 @@ void Testbed::Nerf::Training::update_transforms(int first, int last) {
     CUDA_CHECK_THROW(cudaMemcpy(transforms_gpu.data() + first, transforms.data() + first, n * sizeof(TrainingXForm), cudaMemcpyHostToDevice));
 }
 
-void Testbed::create_empty_nerf_dataset(size_t n_images, int aabb_scale, bool is_hdr) {
-    m_data_path = {};
-    set_mode(ETestbedMode::Nerf);
-    m_nerf.training.dataset = ngp::create_empty_nerf_dataset(n_images, aabb_scale, is_hdr);
-    load_nerf(m_data_path);
-    m_nerf.training.n_images_for_training = 0;
-    m_training_data_available = true;
-}
-
 void Testbed::load_nerf_post() { // moved the second half of load_nerf here
     m_nerf.rgb_activation = m_nerf.training.dataset.is_hdr ? ENerfActivation::Exponential : ENerfActivation::Logistic;
 
@@ -2888,6 +2882,8 @@ void Testbed::load_nerf_post() { // moved the second half of load_nerf here
     while ((1 << m_nerf.max_cascade) < m_nerf.training.dataset.aabb_scale) {
         ++m_nerf.max_cascade;
     }
+    LOG(INFO) << "AABB scale: " << m_nerf.training.dataset.aabb_scale;
+    LOG(INFO) << "Max cascade: " << m_nerf.max_cascade;
 
     // Perform fixed-size stepping in unit-cube scenes (like original NeRF) and exponential
     // stepping in larger scenes.
@@ -2897,31 +2893,36 @@ void Testbed::load_nerf_post() { // moved the second half of load_nerf here
 }
 
 void Testbed::load_nerf(const fs::path& data_path) {
-    if (!data_path.empty()) {
-        std::vector<fs::path> json_paths;
-        if (data_path.is_directory()) {
-            for (const auto& path : fs::directory{data_path}) {
-                if (path.is_file() && equals_case_insensitive(path.extension(), "json")) {
-                    json_paths.emplace_back(path);
-                }
+    if (data_path.empty()) return;
+
+    std::vector<fs::path> json_paths;
+    if (data_path.is_directory()) {
+        for (const auto& path : fs::directory{data_path}) {
+            if (path.is_file() && equals_case_insensitive(path.extension(), "json")) {
+                json_paths.emplace_back(path);
             }
-        } else if (equals_case_insensitive(data_path.extension(), "json")) {
-            json_paths.emplace_back(data_path);
-        } else {
-            throw std::runtime_error{"NeRF data path must either be a json file or a directory containing json files."};
         }
+    } else if (equals_case_insensitive(data_path.extension(), "json")) {
+        json_paths.emplace_back(data_path);
+    } else {
+        throw std::runtime_error{"NeRF data path must either be a json file or a directory containing json files."};
+    }
 
-        const auto prev_aabb_scale = m_nerf.training.dataset.aabb_scale;
+    const auto prev_aabb_scale = m_nerf.training.dataset.aabb_scale;
 
+    if (!json_paths.empty()) {
         m_nerf.training.dataset = ngp::load_nerf(json_paths, m_nerf.sharpen);
+    } else {
+        // If no json file, try our street nerf branch.
+        m_nerf.training.dataset = ngp::load_street_nerf(data_path);
+    }
 
-        // Check if the NeRF network has been previously configured.
-        // If it has not, don't reset it.
-        if (m_nerf.training.dataset.aabb_scale != prev_aabb_scale && m_nerf_network) {
-            // The AABB scale affects network size indirectly. If it changed after loading,
-            // we need to reset the previously configured network to keep a consistent internal state.
-            reset_network();
-        }
+    // Check if the NeRF network has been previously configured.
+    // If it has not, don't reset it.
+    if (m_nerf.training.dataset.aabb_scale != prev_aabb_scale && m_nerf_network) {
+        // The AABB scale affects network size indirectly. If it changed after loading,
+        // we need to reset the previously configured network to keep a consistent internal state.
+        reset_network();
     }
 
     load_nerf_post();
@@ -2929,6 +2930,10 @@ void Testbed::load_nerf(const fs::path& data_path) {
     // Load corresponding obj.
     fs::path obj_path = data_path / fs::path(data_path.basename() + ".obj");
     this->load_mesh_for_density_grid(obj_path);
+
+    // Load corresponding point cloud.
+    fs::path point_cloud_path = data_path / fs::path(data_path.basename() + ".xyz");
+    this->load_point_cloud_for_density_grid(point_cloud_path);
 }
 
 void Testbed::load_mesh_for_density_grid(const fs::path& obj_path) {
@@ -3035,7 +3040,91 @@ void Testbed::load_mesh_for_density_grid(const fs::path& obj_path) {
             }
         }
     }
-    LOG(INFO) << n_occluded_grids;
+    LOG(INFO) << "Number of occluded grids: " << n_occluded_grids;
+}
+
+void Testbed::load_point_cloud_for_density_grid(const fs::path& obj_path) {
+    cl::point_cloud::XYZLoader loader(obj_path.str());
+    if (!loader.is_open()) return;
+
+    cl::Array<cl::FPoint3D> points;
+    loader.Load(&points);
+
+    // Build density grid from point cloud.
+    uint32_t n_elements = NERF_GRID_N_CELLS() * (m_nerf.max_cascade + 1);
+    m_precomputed_density_grid.assign(n_elements, -1.0f);
+
+    std::vector<vec3> verts, colors;
+    std::vector<uint32_t> indices;
+
+    const int grid_size = NERF_GRIDSIZE();
+    int n_occluded_grids = 0;
+    for (int i = 0; i < m_nerf.max_cascade + 1; ++i) {
+        vec3 pos = vec3(-0.5f) * scalbnf(1.0f, i) + vec3(0.5f);
+        float voxel_size = scalbnf(1.0f / grid_size, i);
+        cl::FBox3D box(pos.x, pos.x + voxel_size * grid_size,
+                       pos.y, pos.y + voxel_size * grid_size,
+                       pos.z, pos.z + voxel_size * grid_size);
+
+        int id = 0;
+        for (const cl::FPoint3D& p : points) {
+            vec3 v(p.x, p.y, p.z);
+
+            v = m_nerf.training.dataset.scale * v +
+                m_nerf.training.dataset.offset;
+            std::swap(v.x, v.y);
+            std::swap(v.y, v.z);
+            verts.emplace_back(v.x, v.y, v.z);
+            verts.emplace_back(v.x + 0.001, v.y, v.z + 0.001);
+            verts.emplace_back(v.x + 0.001, v.y, v.z);
+            colors.emplace_back(1.0, 1.0, 1.0);
+            colors.emplace_back(1.0, 1.0, 1.0);
+            colors.emplace_back(1.0, 1.0, 1.0);
+            indices.push_back(id++);
+            indices.push_back(id++);
+            indices.push_back(id++);
+
+            if (!cl::geometry::Intersect(cl::FPoint3D(v.x, v.y, v.z), box))
+                continue;
+            int x = (v.x - box.x_min()) / voxel_size;
+            int y = (v.y - box.y_min()) / voxel_size;
+            int z = (v.z - box.z_min()) / voxel_size;
+            x = cl::Clamp(x, 0, grid_size - 1);
+            y = cl::Clamp(y, 0, grid_size - 1);
+            z = cl::Clamp(z, 0, grid_size - 1);
+
+            const int r = 1;
+            for (int x1 = -r; x1 <= r; ++x1) {
+                for (int y1 = -r; y1 <= r; ++y1) {
+                    for (int z1 = -r; z1 <= r; ++z1) {
+                        int x2 = x + x1;
+                        int y2 = y + y1;
+                        int z2 = z + z1;
+                        if (x2 < 0 || x2 >= grid_size) continue;
+                        if (y2 < 0 || y2 >= grid_size) continue;
+                        if (z2 < 0 || z2 >= grid_size) continue;
+
+                        uint32_t index = tcnn::morton3D(x2, y2, z2);
+                        m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
+                        ++n_occluded_grids;
+                    }
+                }
+            }
+
+//            uint32_t index = tcnn::morton3D(x, y, z);
+//            m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
+//            ++n_occluded_grids;
+        }
+    }
+
+    m_mesh.verts.resize(verts.size());
+    m_mesh.verts.copy_from_host(verts);
+    m_mesh.indices.resize(indices.size());
+    m_mesh.indices.copy_from_host(indices);
+    m_mesh.vert_colors.resize(colors.size());
+    m_mesh.vert_colors.copy_from_host(colors);
+
+    LOG(INFO) << "Number of occluded grids: " << n_occluded_grids;
 }
 
 /**
@@ -3083,15 +3172,14 @@ void Testbed::update_density_grid_nerf(
             if (m_precomputed_density_grid.size() == n_elements) {
                 m_nerf.density_grid.copy_from_host(m_precomputed_density_grid,
                                                    n_elements);
-            } else {
-                linear_kernel(mark_untrained_density_grid, 0, stream,
-                              n_elements,
-                              m_nerf.density_grid.data(),
-                              m_nerf.training.n_images_for_training,
-                              m_nerf.training.dataset.metadata_gpu.data(),
-                              m_nerf.training.transforms_gpu.data(),
-                              m_training_step == 0);
             }
+            linear_kernel(mark_untrained_density_grid, 0, stream,
+                          n_elements,
+                          m_nerf.density_grid.data(),
+                          m_nerf.training.n_images_for_training,
+                          m_nerf.training.dataset.metadata_gpu.data(),
+                          m_nerf.training.transforms_gpu.data(),
+                          m_training_step == 0);
         } else {
             CUDA_CHECK_THROW(cudaMemsetAsync(m_nerf.density_grid.data(), 0,
                                              sizeof(float) * n_elements,
@@ -3232,7 +3320,9 @@ void Testbed::NerfCounters::prepare_for_training_steps(cudaStream_t stream) {
     CUDA_CHECK_THROW(cudaMemsetAsync(loss.data(), 0, sizeof(float)*rays_per_batch, stream));
 }
 
-float Testbed::NerfCounters::update_after_training(uint32_t target_batch_size, bool get_loss_scalar, cudaStream_t stream) {
+float Testbed::NerfCounters::update_after_training(uint32_t target_batch_size,
+                                                   bool get_loss_scalar,
+                                                   cudaStream_t stream) {
     std::vector<uint32_t> counter_cpu(1);
     std::vector<uint32_t> compacted_counter_cpu(1);
     numsteps_counter.copy_to_host(counter_cpu);

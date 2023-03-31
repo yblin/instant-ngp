@@ -196,12 +196,19 @@ private:
                    Array<Point3D<T>>* points,
                    Array<RGB32Color>* colors,
                    Array<Vector3D<T>>* normals) const {
+        static_assert(std::is_floating_point<T>::value, "");
+
+        std::string format_str = "%f %f %f";
+        if (std::is_same<T, double>::value) {
+            format_str = "%lf %lf %lf";
+        }
+
         T x, y, z, nx, ny, nz;
         int r, g, b;
 
         switch(format_) {
         case XYZ:
-            if (std::sscanf(line, "%lf %lf %lf", &x, &y, &z) != 3) {
+            if (std::sscanf(line, format_str.c_str(), &x, &y, &z) != 3) {
                 LOG(INFO) << ErrorMessage();
                 return false;
             }
@@ -210,7 +217,7 @@ private:
 
         case XYZ_RGB:
             if (colors) {
-                if (std::sscanf(line, "%lf %lf %lf %d %d %d",
+                if (std::sscanf(line, (format_str + " %d %d %d").c_str(),
                                 &x, &y, &z, &r, &g, &b) != 6) {
                     LOG(INFO) << ErrorMessage();
                     return false;
@@ -218,7 +225,7 @@ private:
                 points->emplace_back(x, y, z);
                 colors->emplace_back(r, g, b);
             } else {
-                if (std::sscanf(line, "%lf %lf %lf", &x, &y, &z) != 3) {
+                if (std::sscanf(line, format_str.c_str(), &x, &y, &z) != 3) {
                     LOG(INFO) << ErrorMessage();
                     return false;
                 }
@@ -228,7 +235,9 @@ private:
 
         case XYZ_RGB_NORMAL:
             if (normals) {
-                if (std::sscanf(line, "%lf %lf %lf %d %d %d %lf %lf %lf",
+                if (std::sscanf(line,
+                                (format_str + " %d %d %d " +
+                                 format_str).c_str(),
                                 &x, &y, &z, &r, &g, &b, &nx, &ny, &nz) != 9) {
                     LOG(INFO) << ErrorMessage();
                     return false;
@@ -237,7 +246,7 @@ private:
                 if (colors) colors->emplace_back(r, g, b);
                 normals->emplace_back(nx, ny, nz);
             } else if (colors) {
-                if (std::sscanf(line, "%lf %lf %lf %d %d %d",
+                if (std::sscanf(line, (format_str + " %d %d %d").c_str(),
                                 &x, &y, &z, &r, &g, &b) != 6) {
                     LOG(INFO) << ErrorMessage();
                     return false;
@@ -245,7 +254,7 @@ private:
                 points->emplace_back(x, y, z);
                 colors->emplace_back(r, g, b);
             } else {
-                if (std::sscanf(line, "%lf %lf %lf", &x, &y, &z) != 3) {
+                if (std::sscanf(line, format_str.c_str(), &x, &y, &z) != 3) {
                     LOG(INFO) << ErrorMessage();
                     return false;
                 }
