@@ -66,7 +66,7 @@ int Log2Floor(IntType n) {
  * Return the integer i such as 2^(i-1) < n <= 2^i.
  */
 template <typename IntType>
-IntType Log2Ceiling(IntType n) {
+IntType Log2Ceil(IntType n) {
     CHECK(n >= 0);
     if (n == 0 || n == 1) return 0;
 
@@ -85,8 +85,8 @@ IntType Power2Floor(IntType n) {
  * Return the integer 2^i such as 2^(i-1) < n <= 2^i.
  */
 template <typename IntType>
-IntType Power2Ceiling(IntType n) {
-    int n_bits = Log2Ceiling(n);
+IntType Power2Ceil(IntType n) {
+    int n_bits = Log2Ceil(n);
     CHECK(n_bits < std::numeric_limits<IntType>::digits);
 
     return IntType(1) << n_bits;

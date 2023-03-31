@@ -22,7 +22,9 @@ namespace cuda {
  *
  * Performance (test on GPU 3090, CPU I9 3070HZ)
  *
+ * --------------------------------------------------
  * Matrix and vector multiplication
+ * --------------------------------------------------
  * N     GPUMatrix   Matrix (CPU)   Eigen (CPU)
  * 4     19us        24ns           190ns
  * 16    16us        88ns           479ns
@@ -36,8 +38,8 @@ namespace cuda {
  * 4096  203us       7ms            203ms
  *
  * --------------------------------------------------
- *
- * Matrix and vector multiplication
+ * Matrix and matrix multiplication
+ * --------------------------------------------------
  * N     GPUMatrix   Matrix (CPU)   Eigen (CPU)
  * 4     19us        77ns           51ns
  * 16    23us        1us            709ns

@@ -79,9 +79,10 @@ public:
      * Construct an octree by given depth. The resolution of octree will be
      * (1 << depth)^3.
      */
-    Octree(int depth) {
-        CHECK(depth > 0);
-        CHECK(depth <= (std::numeric_limits<Index>::digits - 1) / 3);
+    Octree(int depth)
+        : depth_(depth) {
+        CHECK(depth_ > 0);
+        CHECK(depth_ <= (std::numeric_limits<Index>::digits - 1) / 3);
 
         root_ = Allocate(1);
         resolution_ = 1 << (depth_ - 1);
@@ -127,7 +128,7 @@ public:
     /**
      * Insert a leaf node at (x, y, z) in octree and return the new node.
      */
-    Node* Insert(int x, int y, int z, const T& data) {
+    std::pair<Node*, bool> Insert(int x, int y, int z, const T& data) {
         CHECK(x >= 0 && x < resolution_);
         CHECK(y >= 0 && y < resolution_);
         CHECK(z >= 0 && z < resolution_);
@@ -288,28 +289,40 @@ protected:
 
     /**
      * Insert a leaf node.
+     *
+     * If the leaf node already exist, we change its value and return a 'false'
+     * label.
      */
-    Node* Insert(int x, int y, int z, const T& data, int depth_mask,
-                 Node* node) {
+    std::pair<Node*, bool> Insert(int x, int y, int z, const T& data,
+                                  int depth_mask, Node* node) {
         if (depth_mask == 0) {
             // Root node.
             node->data_ = data;
-            return node;
+            return {node, true};
         }
 
         int index = GetChildIndex(x, y, z, depth_mask);
         Index location = node->child_location(index);
-        Node* child = node->has_child(index) ? nodes_[location]
-                                             : Allocate(location);
-        node->child_mask_ |= (1 << index);
+        if (node->has_child(index)) {
+            Node* child = nodes_[location];
+            if (depth_mask > 1) {
+                return Insert(x, y, z, data, depth_mask >> 1, child);
+            }
 
-        if (depth_mask > 1) {
-            return Insert(x, y, z, data, depth_mask >> 1, child);
+            // Reach leaf.
+            child->data_ = data;
+            return {child, false};
+        } else {
+            Node* child = Allocate(location);
+            node->child_mask_ |= (1 << index);
+            if (depth_mask > 1) {
+                return Insert(x, y, z, data, depth_mask >> 1, child);
+            }
+
+            // Reach leaf.
+            child->data_ = data;
+            return {child, true};
         }
-
-        // Reach leaf.
-        child->data_ = data;
-        return child;
     }
 
     /**

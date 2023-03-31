@@ -79,7 +79,7 @@ public:
     }
 
     /**
-     * Reset this RangeRay to the intersection of itself and a geometric entity.
+     * Reset this RangeRay to the overlapping part with a box.
      */
     bool Intersect(const Box3D<T>& box) {
         if (box.empty()) {
@@ -101,6 +101,10 @@ public:
 
         return lower_ <= upper_;
     }
+
+    /**
+     * Reset this RangeRay to the overlapping part with a sphere.
+     */
     bool Intersect(const Sphere3D<T>& sphere) {
         T a = DotProduct(direction_, direction_);
         if (a == 0) return false;
@@ -127,6 +131,10 @@ public:
         upper_ = std::min(upper_, (b + root) / a);
         return true;
     }
+
+    /**
+     * Reset this RangeRay to the overlapping part with a cylinder.
+     */
     bool Intersect(const Cylinder3D<T>& cylinder) {
         // Calculate quadratic equation to solve.
         Vector dp = (cylinder.point2() - cylinder.point1()).Normalize();

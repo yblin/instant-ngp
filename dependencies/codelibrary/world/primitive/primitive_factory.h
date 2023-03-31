@@ -12,8 +12,6 @@
 #include <unordered_map>
 
 #include "codelibrary/base/pool.h"
-#include "codelibrary/geometry/mesh/obj_io.h"
-#include "codelibrary/util/io/file_util.h"
 #include "codelibrary/world/kernel/render_object.h"
 #include "codelibrary/world/node.h"
 #include "codelibrary/world/primitive/cube.h"
@@ -42,7 +40,7 @@ public:
     /**
      * Create a node that contain given render object.
      */
-    Node* CreateNode(const std::string& name, RenderObject* object) {
+    Node* Create(const std::string& name, RenderObject* object) {
         std::string type;
         switch (object->type()) {
         case GL_POINTS:
@@ -63,8 +61,20 @@ public:
         node->AddRenderObject(object);
         return node;
     }
-    Node* CreateNode(RenderObject* object) {
-        return CreateNode("", object);
+    Node* Create(RenderObject* object) {
+        return Create("", object);
+    }
+
+    /**
+     * Create a node that contain given render data.
+     */
+    Node* Create(const std::string& name, const RenderData& data) {
+        RenderObject* o = render_objects_.Allocate();
+        o->SetRenderData(data);
+        return Create(name, o);
+    }
+    Node* Create(const RenderData& data) {
+        return Create("", data);
     }
 
     /**
@@ -137,13 +147,12 @@ public:
     }
 
     /**
-     * Create a mesh node from SurfaceMesh.
+     * Create mesh from SurfaceMesh.
      */
     Node* CreateMesh(const std::string& name,
                      const geometry::SurfaceMesh<FPoint3D>& surface_mesh) {
         MeshData mesh;
-        mesh.Load(surface_mesh);
-
+        if (!mesh.Load(surface_mesh)) return nullptr;
         return CreateNode(name, "Mesh", mesh);
     }
     Node* CreateMesh(const geometry::SurfaceMesh<FPoint3D>& surface_mesh) {
@@ -151,25 +160,11 @@ public:
     }
 
     /**
-     * Create a mesh from local file.
+     * Create mesh from local file.
      */
     Node* CreateMesh(const std::string& filename) {
-        std::string suffix = file_util::GetSuffix(filename);
-
-        geometry::SurfaceMesh<FPoint3D> surface_mesh;
-        if (suffix == "obj") {
-            geometry::OBJLoader obj;
-            if (!obj.Open(filename)) return nullptr;
-            if (!obj.Load(&surface_mesh)) return nullptr;
-        } else {
-            LOG(WRONG) << "Unsupport mesh format: " << filename;
-            return nullptr;
-        }
-
-        if (surface_mesh.empty()) return nullptr;
-
         MeshData mesh;
-        mesh.Load(surface_mesh);
+        if (!mesh.Load(filename)) return nullptr;
         return CreateNode(file_util::GetBasename(filename), "Mesh", mesh);
     }
 
@@ -181,7 +176,7 @@ protected:
     Node* CreateNode(const std::string& name,
                      const std::string& type,
                      const Data& data) {
-        RenderObject* object = objects_.Allocate();
+        RenderObject* object = render_objects_.Allocate();
         object->SetRenderData(data);
 
         return CreateNode(name, type, object);
@@ -206,7 +201,7 @@ protected:
     Pool<Node> nodes_;
 
     // Mesh objects.
-    Pool<RenderObject> objects_;
+    Pool<RenderObject> render_objects_;
 
     // Count for each object type.
     std::unordered_map<std::string, int> counts_;

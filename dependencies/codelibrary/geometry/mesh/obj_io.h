@@ -55,6 +55,8 @@ public:
 
     /**
      * Load OBJ into surface mesh.
+     *
+     * Return false if error occurs.
      */
     template <typename T>
     bool Load(SurfaceMesh<Point3D<T>>* mesh, bool swap_y_and_z = false) {
@@ -86,7 +88,8 @@ public:
             if (line[0] == 'v' && line[1] == ' ') {
                 if (std::sscanf(line + 2, "%lf %lf %lf %lf",
                                 &x, &y, &z, &w) < 3) {
-                    LOG(INFO) << ErrorMessage();
+                    LOG(WRONG) << ErrorMessage();
+                    mesh->clear();
                     return false;
                 }
 
@@ -103,14 +106,16 @@ public:
                     if (elements[i].empty()) continue;
                     StringSplit(elements[i], '/', &values);
                     if (values.empty()) {
-                        LOG(INFO) << ErrorMessage();
+                        LOG(WRONG) << ErrorMessage();
+                        mesh->clear();
                         return false;
                     }
 
                     if (std::sscanf(values[0].c_str(), "%d", &id) != 0) {
                         if (id <= 0) {
-                            LOG(INFO) << ErrorMessage("Index must be greater "
-                                                      "than 1.");
+                            LOG(WRONG) << ErrorMessage("Index must be greater "
+                                                       "than 1.");
+                            mesh->clear();
                             return false;
                         }
                         indices.push_back(id);
@@ -118,9 +123,10 @@ public:
                 }
 
                 if (indices.size() < 3) {
-                    LOG(INFO) << ErrorMessage("The number of indices of the "
-                                              "face should not smaller than "
-                                              "3.");
+                    LOG(WRONG) << ErrorMessage("The number of indices of the "
+                                               "face should not smaller than "
+                                               "3.");
+                    mesh->clear();
                     return false;
                 }
 
@@ -129,7 +135,9 @@ public:
                 polygon.resize(indices.size());
                 for (int i = 0; i < indices.size(); ++i) {
                     if (indices[i] > vertices.size()) {
-                        LOG(INFO) << ErrorMessage("Invalid index detected.");
+                        LOG(WRONG) << ErrorMessage("Invalid index detected.");
+                        mesh->clear();
+                        return false;
                     }
                     polygon[i] = vertices[indices[i] - 1];
                 }
@@ -137,7 +145,7 @@ public:
             }
         }
 
-        return true;
+        return !mesh->empty();
     }
 
 private:

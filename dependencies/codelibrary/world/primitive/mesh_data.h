@@ -9,7 +9,9 @@
 #ifndef CODELIBRARY_WORLD_PRIMITIVE_MESH_DATA_H_
 #define CODELIBRARY_WORLD_PRIMITIVE_MESH_DATA_H_
 
+#include "codelibrary/geometry/mesh/obj_io.h"
 #include "codelibrary/geometry/mesh/surface_mesh.h"
+#include "codelibrary/util/io/file_util.h"
 #include "codelibrary/world/kernel/render_data.h"
 #include "codelibrary/world/primitive/quad.h"
 
@@ -25,7 +27,9 @@ struct MeshData : public RenderData {
     /**
      * Load mesh from SurfaceMesh.
      */
-    void Load(const geometry::SurfaceMesh<FPoint3D>& mesh) {
+    bool Load(const geometry::SurfaceMesh<FPoint3D>& mesh) {
+        if (mesh.empty()) return false;
+
         int id = 0;
         std::unordered_map<FPoint3D, int> hash;
         this->clear();
@@ -33,8 +37,9 @@ struct MeshData : public RenderData {
         vertices.reserve(mesh.n_vertices());
         normals.reserve(mesh.n_vertices());
         for (auto v : mesh.vertices()) {
-            if (hash.find(v->point()) == hash.end()) {
-                hash[v->point()] = id++;
+            auto pair = hash.insert({v->point(), id});
+            if (pair.second) {
+                ++id;
                 vertices.push_back(v->point());
             }
         }
@@ -43,7 +48,7 @@ struct MeshData : public RenderData {
         for (auto f : mesh.faces()) {
             // We assume that the face is convex.
             temp.clear();
-            for (auto e : mesh.circular_list(f->halfedge())) {
+            for (auto e : mesh.circular_list(f->edge())) {
                 temp.push_back(hash[e->source_point()]);
             }
             if (temp.size() == 3)
@@ -62,6 +67,27 @@ struct MeshData : public RenderData {
         for (auto v : mesh.vertices()) {
             normals[hash[v->point()]] = normal_map[v];
         }
+
+        return true;
+    }
+
+    /**
+     * Load mesh data from local file.
+     */
+    bool Load(const std::string& filename) {
+        std::string suffix = file_util::GetSuffix(filename);
+
+        geometry::SurfaceMesh<FPoint3D> surface_mesh;
+        if (suffix == "obj") {
+            geometry::OBJLoader obj;
+            if (!obj.Open(filename)) return false;
+            if (!obj.Load(&surface_mesh)) return false;
+        } else {
+            LOG(WRONG) << "Unsupport mesh format: " << filename;
+            return false;
+        }
+
+        return this->Load(surface_mesh);
     }
 };
 

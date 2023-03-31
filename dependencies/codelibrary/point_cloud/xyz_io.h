@@ -192,73 +192,47 @@ private:
      * Read point from 'line'.
      */
     template <typename T>
-    bool ReadPoint(const char* line,
+    bool ReadPoint(char* line,
                    Array<Point3D<T>>* points,
                    Array<RGB32Color>* colors,
                    Array<Vector3D<T>>* normals) const {
         static_assert(std::is_floating_point<T>::value, "");
 
-        std::string format_str = "%f %f %f";
-        if (std::is_same<T, double>::value) {
-            format_str = "%lf %lf %lf";
-        }
-
-        T x, y, z, nx, ny, nz;
+        T nx, ny, nz;
         int r, g, b;
 
         switch(format_) {
         case XYZ:
-            if (std::sscanf(line, format_str.c_str(), &x, &y, &z) != 3) {
-                LOG(INFO) << ErrorMessage();
-                return false;
-            }
-            points->emplace_back(x, y, z);
+            ReadXYZ(line, points);
             break;
 
         case XYZ_RGB:
+            ReadXYZ(line, points);
             if (colors) {
-                if (std::sscanf(line, (format_str + " %d %d %d").c_str(),
-                                &x, &y, &z, &r, &g, &b) != 6) {
-                    LOG(INFO) << ErrorMessage();
-                    return false;
-                }
-                points->emplace_back(x, y, z);
+                Parse(&line, &r);
+                Parse(&line, &g);
+                Parse(&line, &b);
                 colors->emplace_back(r, g, b);
-            } else {
-                if (std::sscanf(line, format_str.c_str(), &x, &y, &z) != 3) {
-                    LOG(INFO) << ErrorMessage();
-                    return false;
-                }
-                points->emplace_back(x, y, z);
             }
             break;
 
         case XYZ_RGB_NORMAL:
+            ReadXYZ(line, points);
             if (normals) {
-                if (std::sscanf(line,
-                                (format_str + " %d %d %d " +
-                                 format_str).c_str(),
-                                &x, &y, &z, &r, &g, &b, &nx, &ny, &nz) != 9) {
-                    LOG(INFO) << ErrorMessage();
-                    return false;
-                }
-                points->emplace_back(x, y, z);
+                Parse(&line, &r);
+                Parse(&line, &g);
+                Parse(&line, &b);
+                Parse(&line, &nx);
+                Parse(&line, &ny);
+                Parse(&line, &nz);
+
                 if (colors) colors->emplace_back(r, g, b);
                 normals->emplace_back(nx, ny, nz);
             } else if (colors) {
-                if (std::sscanf(line, (format_str + " %d %d %d").c_str(),
-                                &x, &y, &z, &r, &g, &b) != 6) {
-                    LOG(INFO) << ErrorMessage();
-                    return false;
-                }
-                points->emplace_back(x, y, z);
+                Parse(&line, &r);
+                Parse(&line, &g);
+                Parse(&line, &b);
                 colors->emplace_back(r, g, b);
-            } else {
-                if (std::sscanf(line, format_str.c_str(), &x, &y, &z) != 3) {
-                    LOG(INFO) << ErrorMessage();
-                    return false;
-                }
-                points->emplace_back(x, y, z);
             }
             break;
         default:
@@ -270,11 +244,39 @@ private:
     }
 
     /**
+     * Read XYZ coordinates from 'line'.
+     */
+    template <typename T>
+    void ReadXYZ(char* line, Array<Point3D<T>>* points) const {
+        T x, y, z;
+        Parse(&line, &x);
+        Parse(&line, &y);
+        Parse(&line, &z);
+        points->emplace_back(x, y, z);
+    }
+
+    /**
      * Return common error message.
      */
     std::string ErrorMessage() const {
         return "Invalid XYZ format at line: " +
                std::to_string(line_reader_.n_line());
+    }
+
+    /**
+     * Sequenced parse data from 'line'.
+     */
+    void Parse(char** line, double* x) const {
+        CHECK(*line != nullptr) << ErrorMessage();
+        *x = std::strtod(*line, line);
+    }
+    void Parse(char** line, float* x) const {
+        CHECK(*line != nullptr) << ErrorMessage();
+        *x = std::strtof(*line, line);
+    }
+    void Parse(char** line, int* x) const {
+        CHECK(*line != nullptr) << ErrorMessage();
+        *x = std::strtol(*line, line, 10);
     }
 
     char* head_line_ = nullptr;
@@ -288,14 +290,22 @@ private:
 template <typename T>
 bool WriteXYZPoints(const std::string& filename,
                     const Array<Point3D<T>>& points) {
+    static_assert(std::is_floating_point<T>::value, "");
+
     FILE* file = std::fopen(filename.c_str(), "wb");
     if (!file) {
         LOG(INFO) << "Cannot open XYZ file '" << filename << "' for writing.";
         return false;
     }
 
-    for (const Point3D<T>& p : points) {
-        fprintf(file, "%f %f %f\n", p.x, p.y, p.z);
+    if (std::is_same<T, float>::value) {
+        for (const Point3D<T>& p : points) {
+            fprintf(file, "%f %f %f\n", p.x, p.y, p.z);
+        }
+    } else {
+        for (const Point3D<T>& p : points) {
+            fprintf(file, "%lf %lf %lf\n", p.x, p.y, p.z);
+        }
     }
 
     std::fclose(file);
@@ -309,6 +319,8 @@ template <typename T>
 bool WriteXYZPoints(const std::string& filename,
                     const Array<Point3D<T>>& points,
                     const Array<RGB32Color>& colors) {
+    static_assert(std::is_floating_point<T>::value, "");
+
     CHECK(points.size() == colors.size());
 
     FILE* file = std::fopen(filename.c_str(), "wb");
@@ -335,6 +347,8 @@ template <typename T>
 bool WriteXYZPoints(const std::string& filename,
                     const Array<Point3D<T>>& points,
                     const Array<Vector3D<T>>& normals) {
+    static_assert(std::is_floating_point<T>::value, "");
+
     CHECK(points.size() == normals.size());
 
     FILE* file = std::fopen(filename.c_str(), "wb");

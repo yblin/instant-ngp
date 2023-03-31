@@ -135,7 +135,6 @@ bool Intersect(const Box3D<T>& box, const Triangle3D<T>& triangle) {
     Vector3D<T> e1 = v2 - v1;
     Vector3D<T> e2 = v0 - v2;
 
-
     T p0, p1, p2, d;
 
     // 9 tests for axis overlapping
@@ -212,9 +211,7 @@ bool Intersect(const Box3D<T>& box, const Triangle3D<T>& triangle) {
 
     // Test if the box intersects the plane of the triangle.
     Plane3D<T> plane(triangle.vertices());
-    if (!Intersect(plane, box)) return false;
-
-    return true;
+    return Intersect(plane, box);
 }
 template <typename T>
 bool Intersect(const Triangle3D<T>& triangle, const Box3D<T>& box) {

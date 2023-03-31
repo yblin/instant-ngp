@@ -766,7 +766,7 @@ NerfDataset load_street_nerf(const fs::path& data_path) {
         }
         cl::StringSplit(line, ',', &parse);
         if (parse.empty()) continue;
-        if (parse[0][0] != '2' && parse[0][0] != '3') continue;
+        if (parse[0][0] == '1' || parse[0][0] == '5' || parse[0][0] == '6') continue;
         fs::path image_path = data_path / "images" / parse[0];
         result.paths.emplace_back(image_path.str());
 

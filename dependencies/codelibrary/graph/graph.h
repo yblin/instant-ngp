@@ -453,7 +453,7 @@ public:
         int n = 0;
         for (int v : vertices) {
             CHECK(v >= 0 && v < n_vertices_);
-            flag[v] = true;            
+            flag[v] = true;
             if (h.find(v) == h.end()) h[v] = n++;
         }
 

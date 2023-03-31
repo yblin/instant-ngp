@@ -27,7 +27,7 @@ namespace geometry {
  * set of polygons, which is much faster.
  *
  * A suitable snap threshold is important for maintaining the topology of
- * polygons. Otherwise in some case the inner contour may exceed the outer
+ * polygons. Otherwise in some cases the inner contour may exceed the outer
  * contour causing topology errors.
  *
  * This class depends on Arrangment2D and Snapper2D.

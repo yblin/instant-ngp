@@ -31,15 +31,21 @@ public:
      * Setup renderer with window and corresponding UI.
      */
     Renderer(Window* window, gl::Camera* camera)
-        : BasicRenderer(window, camera) {}
+        : BasicRenderer(window, camera) {
+        glGenQueries(1, &time_elapsed_query_);
+    }
 
-    virtual ~Renderer() = default;
+    virtual ~Renderer() {
+        glDeleteQueries(1, &time_elapsed_query_);
+    }
 
     /**
      * Render the scene.
      */
     virtual void Render(Scene* scene) override {
         CHECK(scene);
+
+        glBeginQuery(GL_TIME_ELAPSED, time_elapsed_query_);
 
         this->SetupGL();
         scene->Update();
@@ -61,6 +67,12 @@ public:
 
         // Render the finial result.
         TextureRenderer::GetInstance()->RenderColorTexture(out_texture_);
+        glEndQuery(GL_TIME_ELAPSED);
+
+        GLuint64 elapsed_time;
+        glGetQueryObjectui64v(time_elapsed_query_, GL_QUERY_RESULT,
+                              &elapsed_time);
+        rendering_time_ = elapsed_time * 1e-9;
     }
 
     /**
@@ -68,6 +80,13 @@ public:
      */
     void set_show_outlines(bool flag) {
         show_outlines_ = flag;
+    }
+
+    /**
+     * Return the current rendering time.
+     */
+    double rendering_time() {
+        return rendering_time_;
     }
 
 private:
@@ -141,6 +160,12 @@ private:
 
     // Show or hide outlines for the checked nodes.
     bool show_outlines_ = false;
+
+    // Query the rendering time.
+    GLuint time_elapsed_query_ = 0;
+
+    // Rendering time.
+    double rendering_time_ = 0.0;
 
     // Intermediate texture for other passes.
     gl::Texture inter_textures_[N_INTER_FRAMEBUFFERS];

@@ -367,17 +367,17 @@ private:
 
             if (z_near >= z_far) continue;
 
-            FPoint3D pos = origin + direction * (z_near - 1.0f);
-            z_far -= (z_near - 1.0f);
-            z_near = 1.0f;
+            FPoint3D pos = origin + direction * (z_near - 0.1f);
+            z_far -= (z_near - 0.1f);
+            z_near = 0.1f;
 
             gl::Camera light_view(pos, pos + direction, up);
-            light_view.SetOrthoModel(viewing.x_min() - 1.0f,
-                                     viewing.x_max() + 1.0f,
-                                     viewing.y_min() - 1.0f,
-                                     viewing.y_max() + 1.0f,
-                                     z_near - 0.1f,
-                                     z_far  + 1.0f);
+            light_view.SetOrthoModel(viewing.x_min(),
+                                     viewing.x_max(),
+                                     viewing.y_min(),
+                                     viewing.y_max(),
+                                     z_near,
+                                     z_far);
             light_frustum.projection_view = light_view.projection() *
                                             light_view.viewing();
         }

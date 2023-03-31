@@ -1,5 +1,5 @@
 ﻿//
-// Copyright 2011-2022 Yangbin Lin. All Rights Reserved.
+// Copyright 2011-2023 Yangbin Lin. All Rights Reserved.
 //
 // Author: yblin@jmu.edu.cn (Yangbin Lin)
 //
@@ -33,6 +33,8 @@ namespace cl {
  */
 template <typename T>
 class Pool {
+    static const int MAX_CHUNCK_SIZE = 1048576;
+
     // The chunk for object pool.
     struct Chunk {
         explicit Chunk(int n)
@@ -90,11 +92,11 @@ public:
 
         if (cur_chunk_->used_size == cur_chunk_->size) {
             if (cur_chunk_->next == nullptr) {
-                int n = cur_chunk_->size + cur_chunk_->size;
-                if (n < 0) n = INT_MAX;
+                int n = std::min(cur_chunk_->size + cur_chunk_->size,
+                                 MAX_CHUNCK_SIZE);
+                if (n < 0) n = MAX_CHUNCK_SIZE;
 
-                // If not enough memory, we create a new chunk, this chunk's
-                // size is double of the previous one.
+                // If not enough memory, we create a new chunk.
                 auto t = new Chunk(n);
                 cur_chunk_->next = t;
                 t->prev = cur_chunk_;

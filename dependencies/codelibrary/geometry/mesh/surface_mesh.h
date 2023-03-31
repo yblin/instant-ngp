@@ -9,6 +9,8 @@
 #ifndef CODELIBRARY_GEOMETRY_MESH_SURFACE_MESH_H_
 #define CODELIBRARY_GEOMETRY_MESH_SURFACE_MESH_H_
 
+#include <unordered_map>
+
 #include "codelibrary/geometry/box_3d.h"
 #include "codelibrary/geometry/triangle_3d.h"
 #include "codelibrary/geometry/vector_3d.h"
@@ -30,16 +32,16 @@ class SurfaceMesh {
 
 public:
     class BaseVertex;
-    class BaseHalfedge;
+    class BaseEdge;
     class BaseFace;
 
-    using VertexList   = IndexedList<BaseVertex>;
-    using HalfedgeList = IndexedList<BaseHalfedge>;
-    using FaceList     = IndexedList<BaseFace>;
+    using VertexList = IndexedList<BaseVertex>;
+    using EdgeList   = IndexedList<BaseEdge>;
+    using FaceList   = IndexedList<BaseFace>;
 
-    using Vertex   = typename VertexList::Node;
-    using Halfedge = typename HalfedgeList::Node;
-    using Face     = typename FaceList::Node;
+    using Vertex = typename VertexList::Node;
+    using Edge   = typename EdgeList::Node;
+    using Face   = typename FaceList::Node;
 
     /// Base Vertex of SurfaceMesh.
     class BaseVertex {
@@ -49,10 +51,10 @@ public:
         BaseVertex() = default;
 
         /**
-         * Return true if this vertex has no incident halfedges.
+         * Return true if this vertex has no incident edges.
          */
         bool is_isolated() const {
-            return halfedges_.empty();
+            return edges_.empty();
         }
 
         /**
@@ -63,32 +65,32 @@ public:
         }
 
         /**
-         * Return the incident halfedges of this vertex.
+         * Return the incident edges of this vertex.
          */
-        const Array<Halfedge*>& halfedges() const {
-            return halfedges_;
+        const Array<Edge*>& edges() const {
+            return edges_;
         }
 
     private:
         // The position of this vertex.
         Point point_;
 
-        // Incident halfedges (which point outward from the vertex).
-        Array<Halfedge*> halfedges_;
+        // Incident edges (which point outward from the vertex).
+        Array<Edge*> edges_;
     };
 
-    /// Base Halfedge of SurfaceMesh.
-    class BaseHalfedge {
+    /// Base edge of SurfaceMesh.
+    class BaseEdge {
         friend class SurfaceMesh;
 
     public:
-        BaseHalfedge() = default;
+        BaseEdge() = default;
 
         Vertex* source()            const { return source_;         }
         Vertex* target()            const { return target_;         }
         Face* face()                const { return face_;           }
-        Halfedge* next()            const { return next_;           }
-        Halfedge* prev()            const { return prev_;           }
+        Edge* next()                const { return next_;           }
+        Edge* prev()                const { return prev_;           }
         const Point& source_point() const { return source_->point_; }
         const Point& target_point() const { return target_->point_; }
 
@@ -102,11 +104,11 @@ public:
         // The pointer to the incident face.
         Face* face_ = nullptr;
 
-        // The pointer to next halfedge.
-        Halfedge* next_ = nullptr;
+        // The pointer to next edge.
+        Edge* next_ = nullptr;
 
-        // The pointer to previous halfedge.
-        Halfedge* prev_ = nullptr;
+        // The pointer to previous edge.
+        Edge* prev_ = nullptr;
     };
 
     /// Base face of SurfaceMesh.
@@ -116,7 +118,7 @@ public:
     public:
         BaseFace() = default;
 
-        Halfedge* halfedge() const { return halfedge_; }
+        Edge* edge() const { return edge_; }
 
         /**
          * Return triangle of this face.
@@ -124,34 +126,34 @@ public:
          * TODO: Currently only triangular faces are considered.
          */
         Triangle3D<T> GetTriangle() {
-            CHECK(halfedge_ && halfedge_->next());
+            CHECK(edge_ && edge_->next());
 
-            return Triangle3D<T>(halfedge_->source_point(),
-                                 halfedge_->target_point(),
-                                 halfedge_->next()->target_point());
+            return Triangle3D<T>(edge_->source_point(),
+                                 edge_->target_point(),
+                                 edge_->next()->target_point());
         }
 
     private:
-        // The pointer to the incident halfedge.
-        Halfedge* halfedge_ = nullptr;
+        // The pointer to the incident edge.
+        Edge* edge_ = nullptr;
     };
 
     // Iterators.
-    using VertexIterator        = typename VertexList::Iterator;
-    using VertexConstIterator   = typename VertexList::ConstIterator;
-    using HalfedgeIterator      = typename HalfedgeList::Iterator;
-    using HalfedgeConstIterator = typename HalfedgeList::ConstIterator;
-    using FaceIterator          = typename FaceList::Iterator;
-    using FaceConstIterator     = typename FaceList::ConstIterator;
-    using Iterator              = typename Array<Halfedge*>::const_iterator;
+    using VertexIterator      = typename VertexList::Iterator;
+    using VertexConstIterator = typename VertexList::ConstIterator;
+    using EdgeIterator        = typename EdgeList::Iterator;
+    using EdgeConstIterator   = typename EdgeList::ConstIterator;
+    using FaceIterator        = typename FaceList::Iterator;
+    using FaceConstIterator   = typename FaceList::ConstIterator;
+    using Iterator            = typename Array<Edge*>::const_iterator;
 
     // Properties.
     template <class T>
-    using VertexProperty   = typename VertexList::template Property<T>;
+    using VertexProperty = typename VertexList::template Property<T>;
     template <class T>
-    using HalfedgeProperty = typename HalfedgeList::template Property<T>;
+    using EdgeProperty   = typename EdgeList::template Property<T>;
     template <class T>
-    using FaceProperty     = typename FaceList::template Property<T>;
+    using FaceProperty   = typename FaceList::template Property<T>;
 
     SurfaceMesh() = default;
 
@@ -164,7 +166,7 @@ public:
      */
     void clear() {
         vertices_.clear();
-        halfedges_.clear();
+        edges_.clear();
         faces_.clear();
     }
 
@@ -183,10 +185,10 @@ public:
     }
 
     /**
-     * Return the number of halfedges.
+     * Return the number of edges.
      */
-    int n_halfedges() const {
-        return halfedges_.n_available();
+    int n_edges() const {
+        return edges_.n_available();
     }
 
     /**
@@ -204,10 +206,10 @@ public:
     }
 
     /**
-     * Return the number of allocated halfedges.
+     * Return the number of allocated edges.
      */
-    int n_allocated_halfedges() const {
-        return halfedges_.n_allocated();
+    int n_allocated_edges() const {
+        return edges_.n_allocated();
     }
 
     /**
@@ -229,27 +231,27 @@ public:
 
         mesh->clear();
         vertices_.Clone(&mesh->vertices_);
-        halfedges_.Clone(&mesh->halfedges_);
+        edges_.Clone(&mesh->edges_);
         faces_.Clone(&mesh->faces_);
 
         auto v1 = vertices_.begin();
         auto v2 = mesh->vertices_.begin();
         for (; v1 != vertices_.end(); ++v1, ++v2) {
-            auto e1 = v1->halfedges_.begin();
-            auto e2 = v2->halfedges_.begin();
-            for (; e1 != v1->halfedges_.end(); ++e1, ++e2) {
-                *e2 = mesh->halfedges_[e1->id()];
+            auto e1 = v1->edges_.begin();
+            auto e2 = v2->edges_.begin();
+            for (; e1 != v1->edges_.end(); ++e1, ++e2) {
+                *e2 = mesh->edges_[e1->id()];
             }
         }
 
-        auto e1 = halfedges_.begin();
-        auto e2 = mesh->halfedges_.begin();
-        for (; e1 != halfedges_.end(); ++e1, ++e2) {
+        auto e1 = edges_.begin();
+        auto e2 = mesh->edges_.begin();
+        for (; e1 != edges_.end(); ++e1, ++e2) {
             e2->vertex_ = mesh->vertices_[e1->vertex_->id()];
             if (e2->next_)
-                e2->next_ = mesh->halfedges_[e1->next_->id()];
+                e2->next_ = mesh->edges_[e1->next_->id()];
             if (e2->prev_)
-                e2->prev_ = mesh->halfedges_[e1->prev_->id()];
+                e2->prev_ = mesh->edges_[e1->prev_->id()];
             if (e2->face_)
                 e2->face_ = mesh->faces_[e1->face_->id()];
         }
@@ -257,8 +259,8 @@ public:
         auto f1 = faces_.begin();
         auto f2 = mesh->faces_.begin();
         for (; f1 != faces_.end(); ++f1, ++f2) {
-            if (f1->halfedge_) {
-                f2->halfedge_ = mesh->halfedges_[v1->halfedge_->id()];
+            if (f1->edge_) {
+                f2->edge_ = mesh->edges_[v1->edge_->id()];
             }
         }
     }
@@ -281,37 +283,37 @@ public:
         CHECK(vertices.size() >= 3);
 
         Face* face = faces_.Allocate();
-        Array<Halfedge*> halfedges(vertices.size());
+        Array<Edge*> edges(vertices.size());
         for (int i = 0; i < vertices.size(); ++i) {
-            Halfedge* e = halfedges_.Allocate();
+            Edge* e = edges_.Allocate();
             e->source_ = vertices[i];
             e->target_ = (i + 1 == vertices.size()) ? vertices[0]
                                                     : vertices[i + 1];
             e->face_ = face;
-            vertices[i]->halfedges_.push_back(e);
-            halfedges[i] = e;
+            vertices[i]->edges_.push_back(e);
+            edges[i] = e;
         }
-        for (int i = 0; i < halfedges.size(); ++i) {
-            halfedges[i]->next_ = i + 1 == vertices.size() ? halfedges[0]
-                                                           : halfedges[i + 1];
-            halfedges[i]->prev_ = i - 1 >= 0 ? halfedges[i - 1]
-                                             : halfedges.back();
+        for (int i = 0; i < edges.size(); ++i) {
+            edges[i]->next_ = i + 1 == vertices.size() ? edges[0]
+                                                       : edges[i + 1];
+            edges[i]->prev_ = i - 1 >= 0 ? edges[i - 1]
+                                         : edges.back();
         }
 
-        face->halfedge_ = halfedges.front();
+        face->edge_ = edges.front();
     }
 
     // Access functions.
-    const Array<Vertex*>& vertices()    const { return vertices_.nodes();  }
-    const Array<Halfedge*>& halfedges() const { return halfedges_.nodes(); }
-    const Array<Face*>& faces()         const { return faces_.nodes();     }
+    const Array<Vertex*>& vertices() const { return vertices_.nodes(); }
+    const Array<Edge*>& edges()      const { return edges_.nodes();    }
+    const Array<Face*>& faces()      const { return faces_.nodes();    }
 
-    Vertex* vertex(int id)                 { return vertices_[id];  }
-    const Vertex* vertex(int id)     const { return vertices_[id];  }
-    Halfedge* halfedge(int id)             { return halfedges_[id]; }
-    const Halfedge* halfedge(int id) const { return halfedges_[id]; }
-    Face* face(int id)                     { return faces_[id];     }
-    const Face* face(int id)         const { return faces_[id];     }
+    Vertex* vertex(int id)             { return vertices_[id];  }
+    const Vertex* vertex(int id) const { return vertices_[id];  }
+    Edge* edge(int id)                 { return edges_[id];     }
+    const Edge* edge(int id)     const { return edges_[id];     }
+    Face* face(int id)                 { return faces_[id];     }
+    const Face* face(int id)     const { return faces_[id];     }
 
     /**
      * Add a vertex property.
@@ -339,28 +341,28 @@ public:
     }
 
     /**
-     * Add a halfedge property.
+     * Add a edge property.
      */
     template <typename T>
-    HalfedgeProperty<T> AddHalfedgeProperty(const std::string& name,
-                                            const T& initial_value = T()) {
-        return halfedges_.AddProperty(name, initial_value);
+    EdgeProperty<T> AddEdgeProperty(const std::string& name,
+                                    const T& initial_value = T()) {
+        return edges_.AddProperty(name, initial_value);
     }
 
     /**
-     * Add a const halfedge property.
+     * Add a const edge property.
      */
     template <typename T>
-    HalfedgeProperty<T> AddHalfedgeProperty(const T& initial_v = T()) const {
-        return halfedges_.AddProperty(initial_v);
+    EdgeProperty<T> AddEdgeProperty(const T& initial_v = T()) const {
+        return edges_.AddProperty(initial_v);
     }
 
     /**
-     * Get a halfedge property.
+     * Get a edge property.
      */
     template <typename T>
-    HalfedgeProperty<T> GetHalfedgeProperty(const std::string& name) const {
-        return halfedges_.template GetProperty<T>(name);
+    EdgeProperty<T> GetEdgeProperty(const std::string& name) const {
+        return edges_.template GetProperty<T>(name);
     }
 
     /**
@@ -396,10 +398,10 @@ public:
     }
 
     /**
-     * Erase a halfedge property with the given name.
+     * Erase a edge property with the given name.
      */
-    void EraseHalfedgeProperty(const std::string& name) {
-        halfedges_.EraseProperty(name);
+    void EraseEdgeProperty(const std::string& name) {
+        edges_.EraseProperty(name);
     }
 
     /**
@@ -417,10 +419,10 @@ public:
     }
 
     /**
-     * Clear all halfedge properties.
+     * Clear all edge properties.
      */
-    void ClearHalfedgeProperties() {
-        halfedges_.ClearAllProperties();
+    void ClearEdgeProperties() {
+        edges_.ClearAllProperties();
     }
 
     /**
@@ -438,14 +440,14 @@ public:
     }
 
     /**
-     * Return true if the given halfedge is available.
+     * Return true if the given edge is available.
      */
-    bool IsAvailable(Halfedge* e) const {
-        return halfedges_.IsAvailable(e);
+    bool IsAvailable(Edge* e) const {
+        return edges_.IsAvailable(e);
     }
 
     /**
-     * Return true if the given halfedge is available.
+     * Return true if the given edge is available.
      */
     bool IsAvailable(Face* e) const {
         return faces_.IsAvailable(e);
@@ -454,11 +456,11 @@ public:
     /**
      * Get the circular list start from 'e'.
      *
-     * Circular list is used to traverse the halfedges starting from 'e'
-     * according to 'next()'.
+     * Circular list is used to traverse the edges starting from 'e' according
+     * to 'next()'.
      */
-    CircularListView<Halfedge> circular_list(Halfedge* e) const {
-        return CircularListView<Halfedge>(e);
+    CircularListView<Edge> circular_list(Edge* e) const {
+        return CircularListView<Edge>(e);
     }
 
     /**
@@ -467,8 +469,8 @@ public:
     Vector3D<T> GetFaceNormal(const Face* face) const {
         CHECK(face);
 
-        Halfedge* e1 = face->halfedge_;
-        Halfedge* e2 = e1->prev();
+        Edge* e1 = face->edge_;
+        Edge* e2 = e1->prev();
         return Normalize(CrossProduct(e2->target_point() - e2->source_point(),
                                       e1->target_point() - e1->source_point()));
     }
@@ -479,7 +481,7 @@ public:
     VertexProperty<Vector3D<T>> GetVertexNormals() const {
         auto normals = vertices_.AddProperty(Vector3D<T>(0, 0, 0));
         for (auto f : faces_) {
-            for (auto e : circular_list(f->halfedge())) {
+            for (auto e : circular_list(f->edge())) {
                 normals[e->source()] += GetFaceNormal(f);
             }
         }
@@ -509,9 +511,43 @@ public:
         return Box3D<T>(x_min, x_max, y_min, y_max, z_min, z_max);
     }
 
+    /**
+     * Convert SurfaceMesh to compressed mesh for easy transfer and rendering.
+     *
+     * The compressed mesh consists of a set of vertices and a set of face
+     * indices.
+     */
+    void ToCompressMesh(Array<Point>* vertices,
+                        Array<Array<int>>* faces) const {
+        CHECK(vertices);
+        CHECK(faces);
+
+        vertices->clear();
+        faces->clear();
+
+        int id = 0;
+        std::unordered_map<Point, int> hash;
+        for (auto v : vertices_) {
+            auto pair = hash.insert({v->point(), id});
+            if (pair.second) {
+                ++id;
+                vertices->push_back(v->point());
+            }
+        }
+
+        Array<int> indices;
+        for (auto f : faces_) {
+            indices.clear();
+            for (auto e : this->circular_list(f->edge())) {
+                indices.push_back(hash.find(e->source_point())->second);
+            }
+            faces->push_back(indices);
+        }
+    }
+
 protected:
     VertexList vertices_;
-    HalfedgeList halfedges_;
+    EdgeList edges_;
     FaceList faces_;
 };
 

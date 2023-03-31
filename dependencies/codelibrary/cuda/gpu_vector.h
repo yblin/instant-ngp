@@ -22,7 +22,7 @@ namespace cuda {
  * Performance (test on GPU 3090, CPU I9 3070HZ)
  *
  * Vector addition
- * -----------------------------------------
+ * -------------------------------------------------
  * N          GPUVector   Vector (CPU)   Eigen (CPU)
  * 100        10us        43ns           16ns
  * 1000       10us        389ns          202ns

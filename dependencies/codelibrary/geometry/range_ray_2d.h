@@ -1,5 +1,5 @@
 ﻿//
-// Copyright 2022 Yangbin Lin. All Rights Reserved.
+// Copyright 2022-2023 Yangbin Lin. All Rights Reserved.
 //
 // Author: yblin@jmu.edu.cn (Yangbin Lin)
 //
@@ -76,7 +76,7 @@ public:
     }
 
     /**
-     * Reset this RangeRay to the intersection of itself and a geometric entity.
+     * Reset this RangeRay to the overlapping part with a box.
      */
     bool Intersect(const Box2D<T>& box) {
         if (empty() || box.empty()) return false;
@@ -96,6 +96,10 @@ public:
 
         return true;
     }
+
+    /**
+     * Reset this RangeRay to the overlapping part with a circle.
+     */
     bool Intersect(const Circle2D<T>& circle) {
         if (empty()) return false;
 
