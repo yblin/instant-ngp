@@ -36,6 +36,7 @@
 #include <vector>
 
 #include "codelibrary/base/array.h"
+#include "codelibrary/base/clamp.h"
 #include "codelibrary/base/log.h"
 #include "codelibrary/string/string_split.h"
 #include "codelibrary/util/io/line_reader.h"
@@ -758,6 +759,9 @@ NerfDataset load_street_nerf(const fs::path& data_path) {
     // Find the middle camera.
     cl::Array<vec3> camera_poses;
 
+    int n_pixels = 0;
+    std::unique_ptr<uint8_t> pixels;
+
     result.from_mitsuba = false;
     while (char* line = line_reader.ReadLine()) {
         if (first_line) {
@@ -766,7 +770,7 @@ NerfDataset load_street_nerf(const fs::path& data_path) {
         }
         cl::StringSplit(line, ',', &parse);
         if (parse.empty()) continue;
-        if (parse[0][0] == '1' || parse[0][0] == '5' || parse[0][0] == '6') continue;
+//        if (parse[0][0] != '2' && parse[0][0] != '5') continue;
         fs::path image_path = data_path / "images" / parse[0];
         result.paths.emplace_back(image_path.str());
 
@@ -878,7 +882,7 @@ NerfDataset load_street_nerf(const fs::path& data_path) {
                                   result.sharpness_resolution.y *
                                   result.n_images);
 
-    // copy / convert images to the GPU.
+    // Copy / convert images to the GPU.
     for (uint32_t i = 0; i < result.n_images; ++i) {
         const LoadedImageInfo& m = images[i];
         result.set_training_image(i, m.res, m.pixels, m.depth_pixels,
