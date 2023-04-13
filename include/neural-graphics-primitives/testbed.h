@@ -477,6 +477,7 @@ public:
 #endif
 
     double calculate_iou(uint32_t n_samples=128*1024*1024, float scale_existing_results_factor=0.0, bool blocking=true, bool force_use_octree = true);
+    void prepare_next_camera_path_frame();
     void draw_visualizations(ImDrawList* list, const mat4x3& camera_matrix);
     void train_and_render(bool skip_rendering);
     fs::path training_data_path() const;

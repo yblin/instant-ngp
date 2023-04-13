@@ -588,14 +588,6 @@ void Testbed::load_block_nerf(const fs::path& path) {
     }
 
     // Needs to happen after `load_nerf_post()`
-    if (snapshot.contains("render_aabb_to_local"))
-        from_json(snapshot.at("render_aabb_to_local"), m_render_aabb_to_local);
-    model.render_aabb_to_local = m_render_aabb_to_local;
-    model.render_aabb = m_render_aabb =
-            snapshot.value("render_aabb", m_render_aabb);
-    if (snapshot.contains("up_dir"))
-        from_json(snapshot.at("up_dir"), m_up_dir);
-
     m_network_config_path = path;
     m_network_config = std::move(config);
     reset_nerf_network(model);
