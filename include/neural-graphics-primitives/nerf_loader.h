@@ -84,6 +84,7 @@ struct NerfDataset {
 
 	BoundingBox render_aabb = {};
 	mat3 render_aabb_to_local = mat3(1.0f);
+    BoundingBox camera_aabb = {};
 	vec3 up = {0.0f, 1.0f, 0.0f};
 	vec3 offset = {0.0f, 0.0f, 0.0f};
 	size_t n_images = 0;
@@ -94,6 +95,7 @@ struct NerfDataset {
 	bool is_hdr = false;
 	bool wants_importance_sampling = true;
 	bool has_rays = false;
+    int n_training_steps = 10000;
 
 	uint32_t n_extra_learnable_dims = 0;
 	bool has_light_dirs = false;
@@ -184,7 +186,9 @@ struct NerfDataset {
 	}
 };
 
-NerfDataset load_nerf(const std::vector<fs::path>& jsonpaths, float sharpen_amount = 0.f);
-NerfDataset load_street_nerf(const fs::path& data_path);
+NerfDataset load_nerf(const std::vector<fs::path>& jsonpaths,
+                      float sharpen_amount = 0.f);
+NerfDataset load_block_nerf_data(const fs::path& data_path,
+                                 const std::string& block_name);
 
 NGP_NAMESPACE_END

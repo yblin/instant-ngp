@@ -31,6 +31,9 @@
 
 #include <json/json.hpp>
 
+#include "codelibrary/base/array.h"
+#include "codelibrary/geometry/point_3d.h"
+
 #ifdef NGP_PYTHON
 #  include <pybind11/pybind11.h>
 #  include <pybind11/numpy.h>
@@ -261,6 +264,18 @@ public:
         uint32_t n_pos;
     };
 
+    /**
+     * NeRF model for one block.
+     */
+    struct BlockNeRFModel {
+        BoundingBox camera_aabb;
+        float data_scale;
+        vec3 data_offset;
+        tcnn::GPUMemory<float> density_grid;
+        std::shared_ptr<tcnn::Optimizer<precision_t>> optimizer;
+        std::shared_ptr<NerfNetwork<precision_t>> network;
+    };
+
     NetworkDims network_dims_volume() const;
     NetworkDims network_dims_sdf() const;
     NetworkDims network_dims_image() const;
@@ -365,11 +380,19 @@ public:
     bool reprojection_available() { return m_dlss; }
     static ELossType string_to_loss_type(const std::string& str);
     void reset_network(bool clear_density_grid = true);
+    void reset_nerf_network(BlockNeRFModel& model);
+    void set_block_nerf(const BlockNeRFModel& model);
     void load_nerf(const fs::path& data_path);
     void load_nerf_post();
+    void load_block_nerf_data(const fs::path& path, const std::string& block);
     void load_mesh_for_density_grid(const fs::path& obj_path);
     void load_mesh(const fs::path& data_path);
     void load_point_cloud_for_density_grid(const fs::path& path);
+    void train_street_view_nerf(const fs::path& path);
+    void save_block_nerf(const fs::path& path, bool compress);
+    void load_block_nerf(const fs::path& path);
+    void render_street_view_nerf(const fs::path& path);
+    void build_density_grid_from_point_cloud();
     void set_exposure(float exposure) { m_exposure = exposure; }
     void set_max_level(float maxlevel);
     void set_visualized_dim(int dim);
@@ -425,7 +448,6 @@ public:
 
     template <typename T>
     void dump_parameters_as_images(const T* params, const std::string& filename_base);
-    void prepare_next_camera_path_frame();
     void imgui();
     void training_prep_nerf(uint32_t batch_size, cudaStream_t stream);
     void training_prep_sdf(uint32_t batch_size, cudaStream_t stream);
@@ -525,6 +547,9 @@ public:
     MeshState m_mesh;
     bool m_want_repl = false;
 
+    // Point cloud for acceleration.
+    cl::Array<cl::FPoint3D> m_point_cloud;
+
     bool m_render_window = false;
     bool m_gather_histograms = false;
 
@@ -560,12 +585,14 @@ public:
     mat4x3 m_smoothed_camera = mat4x3(1.0f);
     size_t m_render_skip_due_to_lack_of_camera_movement_counter = 0;
 
+    CameraPath m_camera_path = {};
+
     bool m_fps_camera = false;
     bool m_camera_smoothing = false;
     bool m_autofocus = false;
     vec3 m_autofocus_target = vec3(0.5f);
 
-    CameraPath m_camera_path = {};
+    //CameraPath m_camera_path = {};
 
     vec3 m_up_dir = {0.0f, 1.0f, 0.0f};
     vec3 m_sun_dir = normalize(vec3(1.0f));
@@ -576,6 +603,7 @@ public:
     EMeshRenderMode m_mesh_render_mode = EMeshRenderMode::Off;
 
     uint32_t m_seed = 1337;
+
 
 #ifdef NGP_GUI
     GLFWwindow* m_glfw_window = nullptr;
@@ -620,6 +648,9 @@ public:
             int n_images_for_training = 0;
             // How many images we saw last time we updated the density grid
             int n_images_for_training_prev = 0;
+
+            // How many steps for training.
+            int n_training_steps = 10000;
 
             struct ErrorMap {
                 tcnn::GPUMemory<float> data;
@@ -957,6 +988,7 @@ public:
     float m_histo_scale = 1.f;
 
     uint32_t m_training_step = 0;
+    int m_max_trainning_steps = 10000;
     uint32_t m_training_batch_size = 1 << 18;
     Ema m_loss_scalar = {EEmaType::Time, 100};
     std::vector<float> m_loss_graph = std::vector<float>(256, 0.0f);
@@ -1140,6 +1172,7 @@ public:
 
     nlohmann::json m_network_config;
 
+    std::vector<BlockNeRFModel> m_block_nerfs;
 
     default_rng_t m_rng;
 
@@ -1206,6 +1239,9 @@ public:
 
     // Precomputed density grid.
     std::vector<float> m_precomputed_density_grid;
+
+    // Inputed full street view camera poses.
+    cl::Array<vec3> m_camera_poses;
 };
 
 NGP_NAMESPACE_END

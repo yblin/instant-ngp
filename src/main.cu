@@ -60,27 +60,19 @@ int main_func(const std::vector<std::string>& arguments) {
 		{"no-gui"},
 	};
 
-	Flag vr_flag{
-		parser,
-		"VR",
-		"Enables VR",
-		{"vr"}
-	};
+    Flag train_flag{
+        parser,
+        "TRAIN",
+        "Train street views.",
+        {'t', "train"},
+    };
 
-	Flag no_train_flag{
-		parser,
-		"NO_TRAIN",
-		"Disables training on startup.",
-		{"no-train"},
-	};
-
-	ValueFlag<string> scene_flag{
-		parser,
-		"SCENE",
-        "The scene to load. Can be NeRF dataset, a *.obj/*.stl mesh for "
-        "training a SDF, an image, or a *.nvdb volume.",
-		{'s', "scene"},
-	};
+    Flag render_flag{
+        parser,
+        "RENDER",
+        "Render street views.",
+        {'r', "render"},
+    };
 
 	ValueFlag<string> snapshot_flag{
 		parser,
@@ -147,21 +139,28 @@ int main_func(const std::vector<std::string>& arguments) {
 
 	Testbed testbed;
 
-	for (auto file : get(files)) {
-		testbed.load_file(file);
-	}
+    if (train_flag) {
+        for (auto file : get(files)) {
+            testbed.train_street_view_nerf(file);
+        }
+    } else if (render_flag) {
+        for (auto file : get(files)) {
+            testbed.render_street_view_nerf(file);
+        }
+    } else {
+        // No train and render flags, do traditional instant-NGP.
+        for (auto file : get(files)) {
+            testbed.load_file(file);
+        }
+    }
 
-	if (scene_flag) {
-		testbed.load_training_data(get(scene_flag));
-	}
+//	if (snapshot_flag) {
+//		testbed.load_snapshot(get(snapshot_flag));
+//	} else if (network_config_flag) {
+//		testbed.reload_network_from_file(get(network_config_flag));
+//	}
 
-	if (snapshot_flag) {
-		testbed.load_snapshot(get(snapshot_flag));
-	} else if (network_config_flag) {
-		testbed.reload_network_from_file(get(network_config_flag));
-	}
-
-    testbed.m_train = !no_train_flag;
+    testbed.m_train = false;
 
 #ifdef NGP_GUI
 	bool gui = !no_gui_flag;

@@ -575,7 +575,9 @@ __global__ void generate_grid_samples_nerf_uniform(ivec3 res_3d, const uint32_t 
     out[i] = { warp_position(pos, train_aabb), warp_dt(MIN_CONE_STEPSIZE()) };
 }
 
-// generate samples for uniform grid including constant ray direction
+/**
+ * Generate samples for uniform grid including constant ray direction.
+ */
 __global__ void generate_grid_samples_nerf_uniform_dir(ivec3 res_3d, const uint32_t step, BoundingBox render_aabb, mat3 render_aabb_to_local, BoundingBox train_aabb, vec3 ray_dir, NerfCoordinate* __restrict__ network_input, bool voxel_centers) {
     // check grid_in for negative values -> must be negative on output
     uint32_t x = threadIdx.x + blockIdx.x * blockDim.x;
@@ -2336,12 +2338,18 @@ uint32_t Testbed::NerfTracer::trace(
         {
             CUDA_CHECK_THROW(cudaMemsetAsync(m_alive_counter, 0, sizeof(uint32_t), stream));
             linear_kernel(compact_kernel_nerf, 0, stream,
-                n_alive,
-                rays_tmp.rgba, rays_tmp.depth, rays_tmp.payload,
-                rays_current.rgba, rays_current.depth, rays_current.payload,
-                m_rays_hit.rgba, m_rays_hit.depth, m_rays_hit.payload,
-                m_alive_counter, m_hit_counter
-            );
+                          n_alive,
+                          rays_tmp.rgba,
+                          rays_tmp.depth,
+                          rays_tmp.payload,
+                          rays_current.rgba,
+                          rays_current.depth,
+                          rays_current.payload,
+                          m_rays_hit.rgba,
+                          m_rays_hit.depth,
+                          m_rays_hit.payload,
+                          m_alive_counter,
+                          m_hit_counter);
             CUDA_CHECK_THROW(cudaMemcpyAsync(&n_alive, m_alive_counter, sizeof(uint32_t), cudaMemcpyDeviceToHost, stream));
             CUDA_CHECK_THROW(cudaStreamSynchronize(stream));
         }
@@ -2412,7 +2420,8 @@ uint32_t Testbed::NerfTracer::trace(
     }
 
     uint32_t n_hit;
-    CUDA_CHECK_THROW(cudaMemcpyAsync(&n_hit, m_hit_counter, sizeof(uint32_t), cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK_THROW(cudaMemcpyAsync(&n_hit, m_hit_counter, sizeof(uint32_t),
+                                     cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK_THROW(cudaStreamSynchronize(stream));
     return n_hit;
 }
@@ -2505,6 +2514,9 @@ const float* Testbed::get_inference_extra_dims(cudaStream_t stream) const {
     return dims_gpu;
 }
 
+/**
+ * Render nerf here.
+ */
 void Testbed::render_nerf(cudaStream_t stream,
                           const CudaRenderBufferView& render_buffer,
                           NerfNetwork<precision_t>& nerf_network,
@@ -2642,7 +2654,7 @@ void Testbed::render_nerf(cudaStream_t stream,
         for (uint32_t i = 0; i < n_hit; ++i) {
             total_n_steps += payloads_final_cpu[i].n_steps;
         }
-        tlog::info() << "Total steps per hit= " << total_n_steps << "/" << n_hit << " = " << ((float)total_n_steps/(float)n_hit);
+//        tlog::info() << "Total steps per hit= " << total_n_steps << "/" << n_hit << " = " << ((float)total_n_steps/(float)n_hit);
     }
 }
 
@@ -2879,8 +2891,6 @@ void Testbed::load_nerf_post() { // moved the second half of load_nerf here
     while ((1 << m_nerf.max_cascade) < m_nerf.training.dataset.aabb_scale) {
         ++m_nerf.max_cascade;
     }
-    LOG(INFO) << "AABB scale: " << m_nerf.training.dataset.aabb_scale;
-    LOG(INFO) << "Max cascade: " << m_nerf.max_cascade;
 
     // Perform fixed-size stepping in unit-cube scenes (like original NeRF) and exponential
     // stepping in larger scenes.
@@ -2911,7 +2921,8 @@ void Testbed::load_nerf(const fs::path& data_path) {
         m_nerf.training.dataset = ngp::load_nerf(json_paths, m_nerf.sharpen);
     } else {
         // If no json file, try our street nerf branch.
-        m_nerf.training.dataset = ngp::load_street_nerf(data_path);
+        m_nerf.training.dataset =
+                ngp::load_block_nerf_data(data_path, "block");
     }
 
     // Check if the NeRF network has been previously configured.
@@ -2929,8 +2940,24 @@ void Testbed::load_nerf(const fs::path& data_path) {
     this->load_mesh_for_density_grid(obj_path);
 
     // Load corresponding point cloud.
-    fs::path point_cloud_path = data_path / fs::path(data_path.basename() + ".xyz");
+    fs::path point_cloud_path = data_path / fs::path(data_path.basename() +
+                                                     ".xyz");
     this->load_point_cloud_for_density_grid(point_cloud_path);
+}
+
+void Testbed::load_block_nerf_data(const fs::path& path,
+                                   const std::string& block) {
+    m_nerf.training.dataset = ngp::load_block_nerf_data(path, block);
+    if (m_nerf_network) {
+        // The AABB scale affects network size indirectly. If it changed
+        // after loading, we need to reset the previously configured
+        // network to keep a consistent internal state.
+        reset_network();
+    }
+
+    this->load_nerf_post();
+
+    this->build_density_grid_from_point_cloud();
 }
 
 void Testbed::load_mesh_for_density_grid(const fs::path& obj_path) {
@@ -3040,13 +3067,7 @@ void Testbed::load_mesh_for_density_grid(const fs::path& obj_path) {
     LOG(INFO) << "Number of occluded grids: " << n_occluded_grids;
 }
 
-void Testbed::load_point_cloud_for_density_grid(const fs::path& obj_path) {
-    cl::point_cloud::XYZLoader loader(obj_path.str());
-    if (!loader.is_open()) return;
-
-    cl::Array<cl::FPoint3D> points;
-    loader.Load(&points);
-
+void Testbed::build_density_grid_from_point_cloud() {
     // Build density grid from point cloud.
     uint32_t n_elements = NERF_GRID_N_CELLS() * (m_nerf.max_cascade + 1);
     m_precomputed_density_grid.assign(n_elements, -1.0f);
@@ -3064,7 +3085,7 @@ void Testbed::load_point_cloud_for_density_grid(const fs::path& obj_path) {
                        pos.z, pos.z + voxel_size * grid_size);
 
         int id = 0;
-        for (const cl::FPoint3D& p : points) {
+        for (const cl::FPoint3D& p : m_point_cloud) {
             vec3 v(p.x, p.y, p.z);
 
             v = m_nerf.training.dataset.scale * v +
@@ -3118,6 +3139,17 @@ void Testbed::load_point_cloud_for_density_grid(const fs::path& obj_path) {
     m_mesh.vert_colors.copy_from_host(colors);
 
     LOG(INFO) << "Number of occluded grids: " << n_occluded_grids;
+}
+
+void Testbed::load_point_cloud_for_density_grid(const fs::path& obj_path) {
+    m_point_cloud.clear();
+    cl::point_cloud::XYZLoader loader(obj_path.str());
+    if (!loader.is_open()) return;
+
+    cl::Array<cl::FPoint3D> points;
+    loader.Load(&m_point_cloud);
+
+    build_density_grid_from_point_cloud();
 }
 
 /**

@@ -78,8 +78,21 @@ class NerfNetwork : public tcnn::Network<float, T> {
 public:
 	using json = nlohmann::json;
 
-	NerfNetwork(uint32_t n_pos_dims, uint32_t n_dir_dims, uint32_t n_extra_dims, uint32_t dir_offset, const json& pos_encoding, const json& dir_encoding, const json& density_network, const json& rgb_network) : m_n_pos_dims{n_pos_dims}, m_n_dir_dims{n_dir_dims}, m_dir_offset{dir_offset}, m_n_extra_dims{n_extra_dims} {
-		m_pos_encoding.reset(tcnn::create_encoding<T>(n_pos_dims, pos_encoding, density_network.contains("otype") && (tcnn::equals_case_insensitive(density_network["otype"], "FullyFusedMLP") || tcnn::equals_case_insensitive(density_network["otype"], "MegakernelMLP")) ? 16u : 8u));
+    NerfNetwork(uint32_t n_pos_dims,
+                uint32_t n_dir_dims,
+                uint32_t n_extra_dims,
+                uint32_t dir_offset,
+                const json& pos_encoding,
+                const json& dir_encoding,
+                const json& density_network,
+                const json& rgb_network)
+        : m_n_pos_dims{n_pos_dims},
+          m_n_dir_dims{n_dir_dims},
+          m_dir_offset{dir_offset},
+          m_n_extra_dims{n_extra_dims} {
+        m_pos_encoding.reset(tcnn::create_encoding<T>(n_pos_dims, pos_encoding,
+                                                      density_network.contains("otype") && (tcnn::equals_case_insensitive(density_network["otype"], "FullyFusedMLP") ||
+                                                                                            tcnn::equals_case_insensitive(density_network["otype"], "MegakernelMLP")) ? 16u : 8u));
 		uint32_t rgb_alignment = tcnn::minimum_alignment(rgb_network);
 		m_dir_encoding.reset(tcnn::create_encoding<T>(m_n_dir_dims + m_n_extra_dims, dir_encoding, rgb_alignment));
 
@@ -478,7 +491,7 @@ public:
 private:
 	std::shared_ptr<tcnn::Network<T>> m_density_network;
 	std::shared_ptr<tcnn::Network<T>> m_rgb_network;
-	std::shared_ptr<tcnn::Encoding<T>> m_pos_encoding;
+    std::shared_ptr<tcnn::Encoding<T>> m_pos_encoding;
 	std::shared_ptr<tcnn::Encoding<T>> m_dir_encoding;
 
 	uint32_t m_rgb_network_input_width;

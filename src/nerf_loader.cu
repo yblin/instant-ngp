@@ -726,13 +726,14 @@ NerfDataset load_nerf(const std::vector<fs::path>& jsonpaths,
 }
 
 /**
- * Load NeRF from street view data.
+ * Load NeRF data from one single block.
  */
-NerfDataset load_street_nerf(const fs::path& data_path) {
-    LOG(INFO) << "Loading NeRF street view dataset from" << data_path;
+NerfDataset load_block_nerf_data(const fs::path& path,
+                                 const std::string& block_name) {
+    LOG(INFO) << "Loading block: " << block_name;
 
-    std::ifstream f{native_string(data_path / "config" / "setting.json")};
-    nlohmann::json setting = nlohmann::json::parse(f, nullptr, true, true);
+    fs::path block_path = path / "blocks" / block_name;
+    CHECK(block_path.exists()) << block_path;
 
     struct LoadedImageInfo {
         ivec2 res = ivec2(0);
@@ -751,7 +752,7 @@ NerfDataset load_street_nerf(const fs::path& data_path) {
     ThreadPool pool;
 
     cl::io::LineReader line_reader;
-    CHECK(line_reader.Open((data_path / "frame_pose.csv").str()));
+    CHECK(line_reader.Open((block_path / "pose.csv").str()));
     cl::Array<std::string> parse;
     bool first_line = true;
     BoundingBox cam_aabb;
@@ -759,7 +760,6 @@ NerfDataset load_street_nerf(const fs::path& data_path) {
     // Find the middle camera.
     cl::Array<vec3> camera_poses;
 
-    int n_pixels = 0;
     std::unique_ptr<uint8_t> pixels;
 
     result.from_mitsuba = false;
@@ -771,7 +771,7 @@ NerfDataset load_street_nerf(const fs::path& data_path) {
         cl::StringSplit(line, ',', &parse);
         if (parse.empty()) continue;
 //        if (parse[0][0] != '2' && parse[0][0] != '5') continue;
-        fs::path image_path = data_path / "images" / parse[0];
+        fs::path image_path = path / "images" / parse[0];
         result.paths.emplace_back(image_path.str());
 
         CHECK(parse.size() >= 21) << parse;
@@ -784,6 +784,7 @@ NerfDataset load_street_nerf(const fs::path& data_path) {
                                  4);
         if (!image.pixels) {
             CHECK(false) << "Could not open image file: "
+                         << image_path << "  -  "
                          << stbi_failure_reason();
         }
         image.image_type = EImageDataType::Byte;
@@ -815,6 +816,7 @@ NerfDataset load_street_nerf(const fs::path& data_path) {
         result.metadata.push_back(metadata);
     }
     result.n_images = result.paths.size();
+    result.camera_aabb = cam_aabb;
 
     // The following data is not used now.
     result.pixelmemory.resize(result.n_images);
@@ -825,32 +827,19 @@ NerfDataset load_street_nerf(const fs::path& data_path) {
         CHECK(false) << "No training images were found for NeRF training!";
     }
 
-    tlog::success() << "Loaded " << images.size() << " images.";
-    tlog::info() << "Original cam_aabb: " << cam_aabb;
+    LOG(INFO) << "Loaded " << images.size() << " images.";
 
+    std::ifstream f{native_string(block_path / "setting.json")};
+    if (!f.is_open()) {
+        f.open(native_string(path / "blocks" / "setting.json"));
+    }
+    CHECK(f.is_open());
+
+    nlohmann::json setting = nlohmann::json::parse(f, nullptr, true, true);
     if (setting.contains("scale")) {
         result.scale = setting["scale"];
     } else {
-        result.scale = 1.0f;
-    }
-
-    if (setting.contains("render_aabb")) {
-        // Map the given aabb of the form [[minx,miny,minz],[maxx,maxy,maxz]]
-        // via an isotropic scale and translate to fit in the (0,0,0)-(1,1,1)
-        // cube, with the given center at 0.5,0.5,0.5
-        const auto& aabb = setting["render_aabb"];
-        vec3 vmin(aabb[0][0], aabb[0][1], aabb[0][2]);
-        vec3 vmax(aabb[1][0], aabb[1][1], aabb[1][2]);
-        vec3 v = vmax - vmin;
-        float scale = std::max(std::max(v.x, v.y), v.z);
-        scale = std::max(0.000001f, scale);
-
-        result.scale = 1.0f / scale;
-        vec3 center = 0.5f * (vmin + vmax) * result.scale;
-        result.offset = vec3(0.5f) - center;
-    } else {
-        vec3 center = camera_poses[camera_poses.size() / 2] * result.scale;
-        result.offset = vec3(0.5f) - center;
+        result.scale = 0.02f; // Default value.
     }
 
     if (setting.contains("aabb_scale")) {
@@ -862,10 +851,12 @@ NerfDataset load_street_nerf(const fs::path& data_path) {
         }
     }
 
-    LOG(INFO) << "Scale: " << result.scale;
-    LOG(INFO) << "Offset: " << result.offset.x << " " << result.offset.y << " "
-              << result.offset.z;
-    LOG(INFO) << "AABB scale: " << result.aabb_scale;
+    if (setting.contains("training_steps")) {
+        result.n_training_steps = setting["training_steps"];
+    }
+
+    vec3 center = camera_poses[camera_poses.size() / 2] * result.scale;
+    result.offset = vec3(0.5f) - center;
 
     // Convert NeRF matrix to NPG's form.
     for (auto& xform : result.xforms) {
@@ -898,7 +889,8 @@ NerfDataset load_street_nerf(const fs::path& data_path) {
         CUDA_CHECK_THROW(cudaDeviceSynchronize());
     }
     CUDA_CHECK_THROW(cudaDeviceSynchronize());
-    // free memory
+
+    // Free memory.
     for (uint32_t i = 0; i < result.n_images; ++i) {
         if (images[i].image_data_on_gpu) {
             CUDA_CHECK_THROW(cudaFree(images[i].pixels));

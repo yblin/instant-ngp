@@ -67,11 +67,18 @@
 #undef far
 
 #include "codelibrary/base/log.h"
+#include "codelibrary/base/index_sort.h"
+#include "codelibrary/point_cloud/xyz_io.h"
 
 using namespace std::literals::chrono_literals;
 using namespace tcnn;
 
 NGP_NAMESPACE_BEGIN
+
+namespace {
+    // Increment this number when making a change to the snapshot format
+    static const size_t SNAPSHOT_FORMAT_VERSION = 1;
+}
 
 int do_system(const std::string& cmd) {
 #ifdef _WIN32
@@ -173,14 +180,14 @@ void Testbed::set_mode(ETestbedMode mode) {
 		return;
 	}
 
-	// Reset mode-specific members
+    // Reset mode-specific members.
 	m_image = {};
 	m_mesh = {};
 	m_nerf = {};
 	m_sdf = {};
 	m_volume = {};
 
-	// Kill training-related things
+    // Kill training-related things.
 	m_encoding = {};
 	m_loss = {};
 	m_network = {};
@@ -237,7 +244,8 @@ fs::path Testbed::find_network_config(const fs::path& network_config_path) {
 }
 
 json Testbed::load_network_config(const fs::path& network_config_path) {
-	bool is_snapshot = equals_case_insensitive(network_config_path.extension(), "msgpack") || equals_case_insensitive(network_config_path.extension(), "ingp");
+    bool is_snapshot = equals_case_insensitive(network_config_path.extension(), "msgpack") ||
+                       equals_case_insensitive(network_config_path.extension(), "ingp");
 	if (network_config_path.empty() || !network_config_path.exists()) {
 		throw std::runtime_error{fmt::format("Network {} '{}' does not exist.", is_snapshot ? "snapshot" : "config", network_config_path.str())};
 	}
@@ -342,12 +350,12 @@ void Testbed::load_file(const fs::path& path) {
 			return;
 		}
 
-		// Camera path
-		if (file.contains("path")) {
-			load_camera_path(path);
-			return;
-		}
-	}
+        // Camera path
+        if (file.contains("path")) {
+            load_camera_path(path);
+            return;
+        }
+    }
 
 	// If the dragged file isn't any of the above, assume that it's training data
 	try {
@@ -363,6 +371,382 @@ void Testbed::load_file(const fs::path& path) {
 	} catch (std::runtime_error& e) {
 		tlog::error() << "Failed to load training data: " << e.what();
 	}
+}
+
+void Testbed::train_street_view_nerf(const fs::path& path) {
+    if (path.empty()) return;
+    CHECK(path.exists());
+
+    this->set_mode(ETestbedMode::Nerf);
+    m_data_path = path;
+
+    // Load corresponding point cloud.
+    LOG(INFO) << "Loading point cloud...";
+    m_point_cloud.clear();
+    fs::path point_cloud_path = path / fs::path(path.basename() + ".xyz");
+    cl::point_cloud::XYZLoader loader(point_cloud_path.str());
+    if (loader.is_open()) {
+        loader.Load(&m_point_cloud);
+    }
+
+    m_block_nerfs.clear();
+
+    // Find all blocks.
+    cl::Array<fs::path> block_paths;
+    cl::Array<std::string> blocks;
+    for (const auto& block_path : fs::directory(path / "blocks")) {
+        std::string block = block_path.basename();
+        if (block.empty() || block[0] != 'b') continue;
+        block_paths.push_back(block_path);
+        blocks.push_back(block);
+    }
+    cl::Array<int> seq;
+    cl::IndexSort(blocks.begin(), blocks.end(), &seq);
+
+    for (int i : seq) {
+        load_block_nerf_data(path, blocks[i]);
+        m_training_data_available = true;
+
+        LOG(INFO) << "Training block: " << blocks[i];
+
+        m_train = true;
+        int max_training_steps = m_nerf.training.dataset.n_training_steps;
+        auto progress = tlog::progress(max_training_steps);
+        while (m_training_step < max_training_steps) {
+            train(m_training_batch_size);
+            progress.update(m_training_step);
+        }
+        m_train = false;
+        this->save_block_nerf(block_paths[i] / "nerf.ingp", true);
+    }
+
+    LOG(INFO) << "Done.";
+}
+
+void Testbed::render_street_view_nerf(const fs::path& path) {
+    if (path.empty()) return;
+    CHECK(path.exists());
+
+    this->set_mode(ETestbedMode::Nerf);
+    m_data_path = path;
+
+    // Find all blocks.
+    cl::Array<fs::path> block_paths;
+    cl::Array<std::string> blocks;
+    for (const auto& block_path : fs::directory(path / "blocks")) {
+        std::string block = block_path.basename();
+        if (block.empty() || block[0] != 'b') continue;
+        block_paths.push_back(block_path);
+        blocks.push_back(block);
+    }
+    cl::Array<int> seq;
+    cl::IndexSort(blocks.begin(), blocks.end(), &seq);
+
+    for (int i : seq) {
+        // Load trained NeRF.
+        this->load_block_nerf(block_paths[i] / "nerf.ingp");
+    }
+
+    LOG(INFO) << "Loading street view camera poses...";
+    m_camera_poses.clear();
+
+    fs::path camera_pose_path = path / "full_poses.csv";
+    CHECK(camera_pose_path.exists()) << camera_pose_path;
+
+    cl::io::LineReader line_reader;
+    CHECK(line_reader.Open(camera_pose_path.str()));
+    cl::Array<std::string> parse;
+    bool first_line = true;
+    BoundingBox cam_aabb;
+
+    while (char* line = line_reader.ReadLine()) {
+        if (first_line) {
+            first_line = false;
+            continue;
+        }
+        cl::StringSplit(line, ',', &parse);
+        if (parse.empty()) continue;
+
+        CHECK(parse.size() >= 21) << parse;
+
+        // Load camera transformation matrices.
+        TrainingXForm xform;
+        int offset = 5;
+        for (int m = 0; m < 3; ++m) {
+            for (int n = 0; n < 4; ++n) {
+                xform.start[n][m] = std::stof(parse[m * 4 + n + offset]);
+                xform.end[n][m] = std::stof(parse[m * 4 + n + offset]);
+            }
+        }
+        // Enlarge camera AABB.
+        vec3 p(xform.start[3][0], xform.start[3][1], xform.start[3][2]);
+        m_camera_poses.push_back(p);
+    }
+
+    CHECK(m_camera_poses.size() % 6 == 0);
+    int n_cameras = 0;
+    for (int i = 0; i < m_camera_poses.size(); i += 6) {
+        vec3 center(0, 0, 0);
+        for (int j = i; j < i + 6; ++j) {
+            center += m_camera_poses[j];
+        }
+        center *= 1.0 / 6.0;
+        m_camera_poses[n_cameras++] = center;
+    }
+    m_camera_poses.resize(n_cameras);
+
+    tlog::success() << "Done.";
+}
+
+void Testbed::save_block_nerf(const fs::path& path, bool compress) {
+    m_network_config["snapshot"] = m_trainer->serialize(false);
+
+    auto& snapshot = m_network_config["snapshot"];
+    snapshot["version"] = SNAPSHOT_FORMAT_VERSION;
+
+    snapshot["density_grid_size"] = NERF_GRIDSIZE();
+
+    GPUMemory<__half> density_grid_fp16(m_nerf.density_grid.size());
+    parallel_for_gpu(density_grid_fp16.size(),
+                     [density_grid=m_nerf.density_grid.data(),
+                      density_grid_fp16=density_grid_fp16.data()] __device__
+                     (size_t i) {
+        density_grid_fp16[i] = (__half)density_grid[i];
+    });
+
+    snapshot["density_grid_binary"] = density_grid_fp16;
+    snapshot["nerf"]["aabb_scale"] = m_nerf.training.dataset.aabb_scale;
+    snapshot["nerf"]["scale"] = m_nerf.training.dataset.scale;
+    snapshot["nerf"]["offset"] = m_nerf.training.dataset.offset;
+    snapshot["camera_aabb"] = m_nerf.training.dataset.camera_aabb;
+
+    m_network_config_path = path;
+    std::ofstream f{native_string(m_network_config_path),
+                    std::ios::out | std::ios::binary};
+    if (equals_case_insensitive(m_network_config_path.extension(), "ingp")) {
+        // zstr::ofstream applies zlib compression.
+        zstr::ostream zf{f, zstr::default_buff_size,
+                         compress ? Z_DEFAULT_COMPRESSION : Z_NO_COMPRESSION};
+        json::to_msgpack(m_network_config, zf);
+    } else {
+        json::to_msgpack(m_network_config, f);
+    }
+
+    tlog::success() << "Saved block NeRF '" << path.str() << "'";
+}
+
+void Testbed::load_block_nerf(const fs::path& path) {
+    auto config = load_network_config(path);
+    CHECK(config.contains("snapshot")) <<
+        fmt::format("File '{}' does not contain a snapshot.", path.str());
+
+    const auto& snapshot = config["snapshot"];
+    CHECK(snapshot.value("version", 0) >= SNAPSHOT_FORMAT_VERSION) <<
+        "Snapshot uses an old format and can not be loaded.";
+
+    set_mode(ETestbedMode::Nerf);
+
+    BlockNeRFModel model;
+
+    CHECK(snapshot["density_grid_size"] == NERF_GRIDSIZE()) <<
+        "Incompatible grid size.";
+
+    // If we haven't got a nerf dataset loaded, load dataset metadata from the
+    // snapshot and render using just that.
+    if (snapshot["nerf"].contains("aabb_scale")) {
+        m_nerf.training.dataset.aabb_scale = snapshot["nerf"]["aabb_scale"];
+    }
+    model.data_offset = m_nerf.training.dataset.offset =
+            snapshot["nerf"]["offset"];
+    model.data_scale = m_nerf.training.dataset.scale =
+            snapshot["nerf"]["scale"];
+    model.camera_aabb = snapshot["camera_aabb"];
+
+    load_nerf_post();
+
+    GPUMemory<__half> density_grid_fp16 = snapshot["density_grid_binary"];
+    m_nerf.density_grid.resize(density_grid_fp16.size());
+
+    parallel_for_gpu(density_grid_fp16.size(),
+                     [density_grid=m_nerf.density_grid.data(),
+                     density_grid_fp16=density_grid_fp16.data()] __device__
+                     (size_t i) {
+        density_grid[i] = (float)density_grid_fp16[i];
+    });
+
+    model.density_grid.resize(density_grid_fp16.size());
+    model.density_grid.copy_from_device(m_nerf.density_grid);
+
+    if (m_nerf.density_grid.size() ==
+        NERF_GRID_N_CELLS() * (m_nerf.max_cascade + 1)) {
+        update_density_grid_mean_and_bitfield(nullptr);
+    } else {
+        // A size of 0 indicates that the density grid was never populated,
+        // which is a valid state of a (yet) untrained model.
+        CHECK(m_nerf.density_grid.size() == 0) <<
+            "Incompatible number of grid cascades.";
+    }
+
+    // Needs to happen after `load_nerf_post()`
+    if (snapshot.contains("render_aabb_to_local"))
+        from_json(snapshot.at("render_aabb_to_local"), m_render_aabb_to_local);
+    model.render_aabb_to_local = m_render_aabb_to_local;
+    model.render_aabb = m_render_aabb =
+            snapshot.value("render_aabb", m_render_aabb);
+    if (snapshot.contains("up_dir"))
+        from_json(snapshot.at("up_dir"), m_up_dir);
+
+    m_network_config_path = path;
+    m_network_config = std::move(config);
+    reset_nerf_network(model);
+    m_block_nerfs.push_back(model);
+
+    set_all_devices_dirty();
+}
+
+void Testbed::reset_nerf_network(BlockNeRFModel& model) {
+    m_rng = default_rng_t{m_seed};
+
+    // Start with a low rendering resolution and gradually ramp up
+    m_render_ms.set(10000);
+
+    reset_accumulation();
+
+    m_loss_graph_samples = 0;
+
+    // Default config.
+    json config = m_network_config;
+    json& encoding_config  = config["encoding"];
+    json& loss_config      = config["loss"];
+    json& optimizer_config = config["optimizer"];
+    json& network_config   = config["network"];
+
+    auto dims = network_dims();
+
+    // Some of the Nerf-supported losses are not supported by tcnn::Loss,
+    // so just create a dummy L2 loss there. The NeRF code path will bypass
+    // the tcnn::Loss in any case.
+    loss_config["otype"] = "L2";
+
+    // Automatically determine certain parameters if we're dealing with the
+    // (hash)grid encoding.
+    if (to_lower(encoding_config.value("otype", "OneBlob")).find("grid") != std::string::npos) {
+        encoding_config["n_pos_dims"] = dims.n_pos;
+
+        m_n_features_per_level = encoding_config.value("n_features_per_level", 2u);
+
+        if (encoding_config.contains("n_features") && encoding_config["n_features"] > 0) {
+            m_n_levels = (uint32_t)encoding_config["n_features"] / m_n_features_per_level;
+        } else {
+            m_n_levels = encoding_config.value("n_levels", 16u);
+        }
+
+        m_level_stats.resize(m_n_levels);
+        m_first_layer_column_stats.resize(m_n_levels);
+
+        const uint32_t log2_hashmap_size = encoding_config.value("log2_hashmap_size", 15);
+
+        m_base_grid_resolution = encoding_config.value("base_resolution", 0);
+        if (!m_base_grid_resolution) {
+            m_base_grid_resolution = 1u << ((log2_hashmap_size) / dims.n_pos);
+            encoding_config["base_resolution"] = m_base_grid_resolution;
+        }
+
+        // Desired resolution of the finest hashgrid level over the unit cube.
+        float desired_resolution = 2048.0f;
+
+        // Automatically determine suitable per_level_scale
+        m_per_level_scale = encoding_config.value("per_level_scale", 0.0f);
+        if (m_per_level_scale <= 0.0f && m_n_levels > 1) {
+            m_per_level_scale = std::exp(std::log(desired_resolution * (float)m_nerf.training.dataset.aabb_scale / (float)m_base_grid_resolution) / (m_n_levels-1));
+            encoding_config["per_level_scale"] = m_per_level_scale;
+        }
+    }
+
+    m_loss.reset(create_loss<precision_t>(loss_config));
+    m_optimizer.reset(create_optimizer<precision_t>(optimizer_config));
+
+    const json& dir_encoding_config = config["dir_encoding"];
+    const json& rgb_network_config = config["rgb_network"];
+
+    uint32_t n_dir_dims = 3;
+    uint32_t n_extra_dims = m_nerf.training.dataset.n_extra_dims();
+
+    // Construct a nerf network.
+    auto network = std::make_shared<NerfNetwork<precision_t>>(
+        dims.n_pos,
+        n_dir_dims,
+        n_extra_dims,
+        // The offset of 1 comes from the dt member variable of
+        // NerfCoordinate. HACKY
+        dims.n_pos + 1,
+        encoding_config,
+        dir_encoding_config,
+        network_config,
+        rgb_network_config
+    );
+    model.optimizer = m_optimizer;
+    model.network = network;
+
+    // Set weight parameters of network.
+    m_trainer = std::make_shared<Trainer<float, precision_t, precision_t>>(
+                network, m_optimizer, m_loss, m_seed);
+    m_trainer->deserialize(m_network_config["snapshot"]);
+
+    m_network = m_nerf_network = model.network;
+
+    m_training_step = 0;
+    m_training_start_time_point = std::chrono::steady_clock::now();
+
+    // Instantiate an additional model for each auxiliary GPU.
+    for (auto& device : m_devices) {
+        device.set_nerf_network(network);
+    }
+
+    set_all_devices_dirty();
+}
+
+void Testbed::set_block_nerf(const BlockNeRFModel& model) {
+    m_nerf.density_grid.resize(model.density_grid.size());
+    m_nerf.density_grid.copy_from_device(model.density_grid);
+    this->update_density_grid_mean_and_bitfield(nullptr);
+
+    // Camera position in real world coordinate system.
+
+    vec3 camera_pos = this->view_pos();
+    // The stupid camera coordinate in InstantNGP is (y, z, x)! (maybe my fault?)
+    std::swap(camera_pos[1], camera_pos[2]);
+    std::swap(camera_pos[0], camera_pos[1]);
+    camera_pos = (camera_pos - m_nerf.training.dataset.offset) /
+                 m_nerf.training.dataset.scale;
+    camera_pos = camera_pos * model.data_scale + model.data_offset;
+    std::swap(camera_pos[0], camera_pos[1]);
+    std::swap(camera_pos[1], camera_pos[2]);
+
+    // Set camera to current block nerf.
+    m_camera[3] = camera_pos;
+    m_nerf.training.dataset.offset = model.data_offset;
+    m_nerf.training.dataset.scale = model.data_scale;
+
+
+    m_rng = default_rng_t{m_seed};
+    // Start with a low rendering resolution and gradually ramp up
+    m_render_ms.set(10000);
+    reset_accumulation();
+    m_loss_graph_samples = 0;
+
+    m_optimizer = model.optimizer;
+    m_network = m_nerf_network = model.network;
+
+    m_training_step = 0;
+    m_training_start_time_point = std::chrono::steady_clock::now();
+
+    // Instantiate an additional model for each auxiliary GPU.
+    for (auto& device : m_devices) {
+        device.set_nerf_network(model.network);
+    }
+
+    set_all_devices_dirty();
 }
 
 void Testbed::reset_accumulation(bool due_to_camera_movement,
@@ -504,7 +888,7 @@ void Testbed::compute_and_save_marching_cubes_mesh(const char* filename, ivec3 r
 		render_aabb_to_local = m_render_aabb_to_local;
 	}
 	marching_cubes(res3d, aabb, render_aabb_to_local, thresh);
-	save_mesh(m_mesh.verts, m_mesh.vert_normals, m_mesh.vert_colors, m_mesh.indices, filename, unwrap_it, m_nerf.training.dataset.scale, m_nerf.training.dataset.offset);
+    save_mesh(m_mesh.verts, m_mesh.vert_normals, m_mesh.vert_colors, m_mesh.indices, filename, unwrap_it, m_nerf.training.dataset.scale, m_nerf.training.dataset.offset);
 }
 
 ivec3 Testbed::compute_and_save_png_slices(const char* filename, int res, BoundingBox aabb, float thresh, float density_range, bool flip_y_and_z_axes) {
@@ -658,119 +1042,119 @@ void Testbed::imgui() {
 	static std::string imgui_error_string = "";
 
 	m_picture_in_picture_res = 0;
-	if (ImGui::Begin("Camera path", 0, ImGuiWindowFlags_NoScrollbar)) {
-		if (ImGui::CollapsingHeader("Path manipulation", ImGuiTreeNodeFlags_DefaultOpen)) {
-			if (int read = m_camera_path.imgui(
-				m_imgui.cam_path_path,
-				m_render_ms.val(),
-				m_camera,
-				m_slice_plane_z,
-				m_scale,
-				fov(),
-				m_aperture_size,
-				m_bounding_radius,
-				!m_nerf.training.dataset.xforms.empty() ? m_nerf.training.dataset.xforms[0].start : mat4x3(1.0f),
-				m_nerf.glow_mode,
+    if (ImGui::Begin("Camera path", 0, ImGuiWindowFlags_NoScrollbar)) {
+        if (ImGui::CollapsingHeader("Path manipulation", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (int read = m_camera_path.imgui(
+                m_imgui.cam_path_path,
+                m_render_ms.val(),
+                m_camera,
+                m_slice_plane_z,
+                m_scale,
+                fov(),
+                m_aperture_size,
+                m_bounding_radius,
+                !m_nerf.training.dataset.xforms.empty() ? m_nerf.training.dataset.xforms[0].start : mat4x3(1.0f),
+                m_nerf.glow_mode,
                 m_nerf.glow_y_cutoff)) {
-				if (!m_camera_path.rendering) {
-					reset_accumulation(true);
+                if (!m_camera_path.rendering) {
+                    reset_accumulation(true);
 
-					if (m_camera_path.update_cam_from_path) {
-						set_camera_from_time(m_camera_path.play_time);
+                    if (m_camera_path.update_cam_from_path) {
+                        set_camera_from_time(m_camera_path.play_time);
 
-						// A value of larger than 1 indicates that the camera path wants
-						// to override camera smoothing.
-						if (read > 1) {
-							m_smoothed_camera = m_camera;
-						}
-					} else {
-						m_pip_render_buffer->reset_accumulation();
-					}
-				}
-			}
+                        // A value of larger than 1 indicates that the camera path wants
+                        // to override camera smoothing.
+                        if (read > 1) {
+                            m_smoothed_camera = m_camera;
+                        }
+                    } else {
+                        m_pip_render_buffer->reset_accumulation();
+                    }
+                }
+            }
 
-			if (!m_camera_path.keyframes.empty()) {
-				float w = ImGui::GetContentRegionAvail().x;
-				if (m_camera_path.update_cam_from_path) {
-					m_picture_in_picture_res = 0;
+            if (!m_camera_path.keyframes.empty()) {
+                float w = ImGui::GetContentRegionAvail().x;
+                if (m_camera_path.update_cam_from_path) {
+                    m_picture_in_picture_res = 0;
                     ImGui::Image((ImTextureID)(size_t)m_rgba_render_texture->texture(),
                                  ImVec2(w, w * 9.0f / 16.0f));
-				} else {
+                } else {
                     m_picture_in_picture_res = (float)std::min((int(w) + 31) & (~31), 1920 / 4);
                     ImGui::Image((ImTextureID)(size_t)m_pip_render_texture->texture(),
                                  ImVec2(w, w * 9.0f / 16.0f));
-				}
-			}
-		}
+                }
+            }
+        }
 
-		if (!m_camera_path.keyframes.empty() && ImGui::CollapsingHeader("Export video", ImGuiTreeNodeFlags_DefaultOpen)) {
-			// Render a video
-			if (imgui_colored_button(m_camera_path.rendering ? "Abort rendering" : "Render video", 0.4)) {
-				m_camera_path.rendering = !m_camera_path.rendering;
+        if (!m_camera_path.keyframes.empty() && ImGui::CollapsingHeader("Export video", ImGuiTreeNodeFlags_DefaultOpen)) {
+            // Render a video
+            if (imgui_colored_button(m_camera_path.rendering ? "Abort rendering" : "Render video", 0.4)) {
+                m_camera_path.rendering = !m_camera_path.rendering;
 
-				if (!clear_tmp_dir()) {
-					imgui_error_string = "Failed to clear temporary directory 'tmp' to hold rendered images.";
-					ImGui::OpenPopup("Error");
+                if (!clear_tmp_dir()) {
+                    imgui_error_string = "Failed to clear temporary directory 'tmp' to hold rendered images.";
+                    ImGui::OpenPopup("Error");
 
-					m_camera_path.rendering = false;
-				}
+                    m_camera_path.rendering = false;
+                }
 
-				if (m_camera_path.rendering) {
-					m_camera_path.render_start_time = std::chrono::steady_clock::now();
-					m_camera_path.update_cam_from_path = true;
-					m_camera_path.play_time = 0.0f;
-					m_camera_path.auto_play_speed = 1.0f;
-					m_camera_path.render_frame_idx = 0;
+                if (m_camera_path.rendering) {
+                    m_camera_path.render_start_time = std::chrono::steady_clock::now();
+                    m_camera_path.update_cam_from_path = true;
+                    m_camera_path.play_time = 0.0f;
+                    m_camera_path.auto_play_speed = 1.0f;
+                    m_camera_path.render_frame_idx = 0;
 
-					m_dlss = false;
-					m_train = false;
+                    m_dlss = false;
+                    m_train = false;
 
-					reset_accumulation(true);
-					set_camera_from_time(m_camera_path.play_time);
-					m_smoothed_camera = m_camera;
-				} else {
-					m_camera_path.update_cam_from_path = false;
-					m_camera_path.play_time = 0.0f;
-					m_camera_path.auto_play_speed = 0.0f;
-				}
-			}
+                    reset_accumulation(true);
+                    set_camera_from_time(m_camera_path.play_time);
+                    m_smoothed_camera = m_camera;
+                } else {
+                    m_camera_path.update_cam_from_path = false;
+                    m_camera_path.play_time = 0.0f;
+                    m_camera_path.auto_play_speed = 0.0f;
+                }
+            }
 
-			if (m_camera_path.rendering) {
-				ImGui::SameLine();
+            if (m_camera_path.rendering) {
+                ImGui::SameLine();
 
-				auto elapsed = std::chrono::steady_clock::now() - m_camera_path.render_start_time;
+                auto elapsed = std::chrono::steady_clock::now() - m_camera_path.render_start_time;
 
                 uint32_t progress = m_camera_path.render_frame_idx * m_camera_path.render_settings.spp +
                                     m_view.render_buffer->spp();
-				uint32_t goal = m_camera_path.render_settings.n_frames() * m_camera_path.render_settings.spp;
-				auto est_remaining = elapsed * (float)(goal - progress) / std::max(progress, 1u);
+                uint32_t goal = m_camera_path.render_settings.n_frames() * m_camera_path.render_settings.spp;
+                auto est_remaining = elapsed * (float)(goal - progress) / std::max(progress, 1u);
 
-				ImGui::Text("%s", fmt::format(
-					"Frame {}/{}, Elapsed: {}, Remaining: {}",
-					m_camera_path.render_frame_idx+1,
-					m_camera_path.render_settings.n_frames(),
-					tlog::durationToString(std::chrono::steady_clock::now() - m_camera_path.render_start_time),
-					tlog::durationToString(est_remaining)
-				).c_str());
-			}
+                ImGui::Text("%s", fmt::format(
+                    "Frame {}/{}, Elapsed: {}, Remaining: {}",
+                    m_camera_path.render_frame_idx+1,
+                    m_camera_path.render_settings.n_frames(),
+                    tlog::durationToString(std::chrono::steady_clock::now() - m_camera_path.render_start_time),
+                    tlog::durationToString(est_remaining)
+                ).c_str());
+            }
 
-			if (m_camera_path.rendering) { ImGui::BeginDisabled(); }
+            if (m_camera_path.rendering) { ImGui::BeginDisabled(); }
 
-			ImGui::InputText("File##Video file path", m_imgui.video_path, sizeof(m_imgui.video_path));
-			m_camera_path.render_settings.filename = m_imgui.video_path;
+            ImGui::InputText("File##Video file path", m_imgui.video_path, sizeof(m_imgui.video_path));
+            m_camera_path.render_settings.filename = m_imgui.video_path;
 
-			ImGui::InputInt2("Resolution", &m_camera_path.render_settings.resolution.x);
-			ImGui::InputFloat("Duration (seconds)", &m_camera_path.render_settings.duration_seconds);
-			ImGui::InputFloat("FPS (frames/second)", &m_camera_path.render_settings.fps);
-			ImGui::InputInt("SPP (samples/pixel)", &m_camera_path.render_settings.spp);
-			ImGui::SliderInt("Quality", &m_camera_path.render_settings.quality, 0, 10);
+            ImGui::InputInt2("Resolution", &m_camera_path.render_settings.resolution.x);
+            ImGui::InputFloat("Duration (seconds)", &m_camera_path.render_settings.duration_seconds);
+            ImGui::InputFloat("FPS (frames/second)", &m_camera_path.render_settings.fps);
+            ImGui::InputInt("SPP (samples/pixel)", &m_camera_path.render_settings.spp);
+            ImGui::SliderInt("Quality", &m_camera_path.render_settings.quality, 0, 10);
 
-			ImGui::SliderFloat("Shutter fraction", &m_camera_path.render_settings.shutter_fraction, 0.0f, 1.0f);
+            ImGui::SliderFloat("Shutter fraction", &m_camera_path.render_settings.shutter_fraction, 0.0f, 1.0f);
 
-			if (m_camera_path.rendering) { ImGui::EndDisabled(); }
-		}
-	}
-	ImGui::End();
+            if (m_camera_path.rendering) { ImGui::EndDisabled(); }
+        }
+    }
+    ImGui::End();
 
 
 	bool train_extra_dims = m_nerf.training.dataset.n_extra_learnable_dims > 0;
@@ -906,7 +1290,6 @@ void Testbed::imgui() {
 		if (imgui_colored_button(m_train ? "Stop training" : "Start training", 0.4)) {
 			set_train(!m_train);
 		}
-
 
 		ImGui::SameLine();
 		if (imgui_colored_button("Reset training", 0.f)) {
@@ -1116,26 +1499,26 @@ void Testbed::imgui() {
 		if (ImGui::TreeNode(transform_section_name.c_str())) {
 			m_edit_render_aabb = true;
 
-			if (ImGui::RadioButton("Translate world", m_camera_path.m_gizmo_op == ImGuizmo::TRANSLATE && m_edit_world_transform)) {
-				m_camera_path.m_gizmo_op = ImGuizmo::TRANSLATE;
+            if (ImGui::RadioButton("Translate world", m_camera_path.m_gizmo_op == ImGuizmo::TRANSLATE && m_edit_world_transform)) {
+                m_camera_path.m_gizmo_op = ImGuizmo::TRANSLATE;
 				m_edit_world_transform = true;
 			}
 
 			ImGui::SameLine();
-			if (ImGui::RadioButton("Rotate world", m_camera_path.m_gizmo_op == ImGuizmo::ROTATE && m_edit_world_transform)) {
-				m_camera_path.m_gizmo_op = ImGuizmo::ROTATE;
+            if (ImGui::RadioButton("Rotate world", m_camera_path.m_gizmo_op == ImGuizmo::ROTATE && m_edit_world_transform)) {
+                m_camera_path.m_gizmo_op = ImGuizmo::ROTATE;
 				m_edit_world_transform = true;
 			}
 
 			if (m_testbed_mode == ETestbedMode::Nerf) {
-				if (ImGui::RadioButton("Translate crop box", m_camera_path.m_gizmo_op == ImGuizmo::TRANSLATE && !m_edit_world_transform)) {
-					m_camera_path.m_gizmo_op = ImGuizmo::TRANSLATE;
+                if (ImGui::RadioButton("Translate crop box", m_camera_path.m_gizmo_op == ImGuizmo::TRANSLATE && !m_edit_world_transform)) {
+                    m_camera_path.m_gizmo_op = ImGuizmo::TRANSLATE;
 					m_edit_world_transform = false;
 				}
 
 				ImGui::SameLine();
-				if (ImGui::RadioButton("Rotate crop box", m_camera_path.m_gizmo_op == ImGuizmo::ROTATE && !m_edit_world_transform)) {
-					m_camera_path.m_gizmo_op = ImGuizmo::ROTATE;
+                if (ImGui::RadioButton("Rotate crop box", m_camera_path.m_gizmo_op == ImGuizmo::ROTATE && !m_edit_world_transform)) {
+                    m_camera_path.m_gizmo_op = ImGuizmo::ROTATE;
 					m_edit_world_transform = false;
 				}
 
@@ -1303,9 +1686,9 @@ void Testbed::imgui() {
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("Debug visualization")) {
+        if (ImGui::TreeNode("Debug visualization")) {
 			ImGui::Checkbox("Visualize unit cube", &m_visualize_unit_cube);
-			if (m_testbed_mode == ETestbedMode::Nerf) {
+            if (m_testbed_mode == ETestbedMode::Nerf && m_nerf.visualize_cameras > 0) {
 				ImGui::SameLine();
 				ImGui::Checkbox("Visualize cameras", &m_nerf.visualize_cameras);
 				accum_reset |= ImGui::SliderInt("Show acceleration", &m_nerf.show_accel, -1, 7);
@@ -1319,7 +1702,7 @@ void Testbed::imgui() {
 				set_visualized_layer(m_visualized_layer);
 			}
 
-            if (m_testbed_mode == ETestbedMode::Nerf) {
+            if (m_testbed_mode == ETestbedMode::Nerf && m_nerf.visualize_cameras > 0) {
 				if (ImGui::Button("First")) {
 					first_training_view();
 				}
@@ -1357,10 +1740,34 @@ void Testbed::imgui() {
 					accum_reset = true;
 				}
 
-				if (m_nerf.glow_mode && ImGui::SliderFloat("Glow height", &m_nerf.glow_y_cutoff, -2.f, 3.f)) {
+                if (m_nerf.glow_mode &&
+                    ImGui::SliderFloat("Glow height", &m_nerf.glow_y_cutoff,
+                                       -2.f, 3.f)) {
 					accum_reset = true;
 				}
 			}
+
+            if (!this->m_block_nerfs.empty()) {
+                static int block_nerf_id = 0;
+
+                if (ImGui::Button("Previous")) {
+                    if (block_nerf_id > 0) --block_nerf_id;
+                    set_block_nerf(m_block_nerfs[block_nerf_id]);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Next")) {
+                    if (block_nerf_id + 1 < m_block_nerfs.size())
+                        ++block_nerf_id;
+                    set_block_nerf(m_block_nerfs[block_nerf_id]);
+                }
+                ImGui::SameLine();
+                ImGui::Text("%d", block_nerf_id);
+
+                if (ImGui::SliderInt("Block nerf view", &block_nerf_id, 0,
+                                     (int)m_block_nerfs.size() - 1)) {
+                    set_block_nerf(m_block_nerfs[block_nerf_id]);
+                }
+            }
 
 			ImGui::TreePop();
 		}
@@ -1388,8 +1795,6 @@ void Testbed::imgui() {
 		ImGui::SameLine();
 		accum_reset |= ImGui::SliderFloat("Zoom", &m_zoom, 1.f, 10.f);
 		ImGui::PopItemWidth();
-
-
 
 		if (ImGui::TreeNode("Advanced camera settings")) {
 			accum_reset |= ImGui::SliderFloat2("Screen center", &m_screen_center.x, 0.f, 1.f);
@@ -1750,30 +2155,30 @@ void Testbed::draw_visualizations(ImDrawList* list, const mat4x3& camera_matrix)
 
 		auto prev_matrix = matrix;
 
-		if (ImGuizmo::Manipulate((const float*)&world2view_guizmo, (const float*)&view2proj_guizmo, m_camera_path.m_gizmo_op, ImGuizmo::LOCAL, (float*)&matrix, NULL, NULL)) {
-			auto crop_transform = matrix;
-			if (m_edit_world_transform) {
-				// We transform the world by transforming the camera in the opposite direction.
-				auto rel = prev_matrix * inverse(matrix);
-				m_camera = mat3(rel) * m_camera;
-				m_camera[3] += rel[3].xyz();
+        if (ImGuizmo::Manipulate((const float*)&world2view_guizmo, (const float*)&view2proj_guizmo, m_camera_path.m_gizmo_op, ImGuizmo::LOCAL, (float*)&matrix, NULL, NULL)) {
+            auto crop_transform = matrix;
+            if (m_edit_world_transform) {
+                // We transform the world by transforming the camera in the opposite direction.
+                auto rel = prev_matrix * inverse(matrix);
+                m_camera = mat3(rel) * m_camera;
+                m_camera[3] += rel[3].xyz();
 
-				m_up_dir = mat3(rel) * m_up_dir;
-			} else {
-				m_render_aabb_to_local = transpose(mat3(matrix));
-				vec3 new_cen = m_render_aabb_to_local * matrix[3].xyz;
-				vec3 old_cen = m_render_aabb.center();
-				m_render_aabb.min += new_cen - old_cen;
-				m_render_aabb.max += new_cen - old_cen;
-			}
+                m_up_dir = mat3(rel) * m_up_dir;
+            } else {
+                m_render_aabb_to_local = transpose(mat3(matrix));
+                vec3 new_cen = m_render_aabb_to_local * matrix[3].xyz;
+                vec3 old_cen = m_render_aabb.center();
+                m_render_aabb.min += new_cen - old_cen;
+                m_render_aabb.max += new_cen - old_cen;
+            }
 
-			reset_accumulation();
-		}
+            reset_accumulation();
+        }
 	}
 
-	if (m_camera_path.imgui_viz(list, view2proj, world2proj, world2view, focal, aspect, m_ndc_znear, m_ndc_zfar)) {
-		m_pip_render_buffer->reset_accumulation();
-	}
+    if (m_camera_path.imgui_viz(list, view2proj, world2proj, world2view, focal, aspect, m_ndc_znear, m_ndc_zfar)) {
+        m_pip_render_buffer->reset_accumulation();
+    }
 }
 
 void glfw_error_callback(int error, const char* description) {
@@ -1800,13 +2205,13 @@ bool Testbed::keyboard_event() {
 	bool ctrl = ImGui::GetIO().KeyMods & ImGuiKeyModFlags_Ctrl;
 	bool shift = ImGui::GetIO().KeyMods & ImGuiKeyModFlags_Shift;
 
-	if (ImGui::IsKeyPressed('Z')) {
-		m_camera_path.m_gizmo_op = ImGuizmo::TRANSLATE;
-	}
+    if (ImGui::IsKeyPressed('Z')) {
+        m_camera_path.m_gizmo_op = ImGuizmo::TRANSLATE;
+    }
 
-	if (ImGui::IsKeyPressed('X')) {
-		m_camera_path.m_gizmo_op = ImGuizmo::ROTATE;
-	}
+    if (ImGui::IsKeyPressed('X')) {
+        m_camera_path.m_gizmo_op = ImGuizmo::ROTATE;
+    }
 
 	if (ImGui::IsKeyPressed('E')) {
 		set_exposure(m_exposure + (shift ? -0.5f : 0.5f));
@@ -2366,123 +2771,123 @@ __global__ void to_8bit_color_kernel(
 }
 
 void Testbed::prepare_next_camera_path_frame() {
-	if (!m_camera_path.rendering) {
-		return;
-	}
+    if (!m_camera_path.rendering) {
+        return;
+    }
 
     // If we're rendering a video, we'd like to accumulate multiple spp for
     // motion blur. Hence dump the frame once the target spp has been reached
-	// and only reset _then_.
+    // and only reset _then_.
     if (m_view.render_buffer->spp() == m_camera_path.render_settings.spp) {
-		auto tmp_dir = fs::path{"tmp"};
-		if (!tmp_dir.exists()) {
-			if (!fs::create_directory(tmp_dir)) {
-				m_camera_path.rendering = false;
-				tlog::error() << "Failed to create temporary directory 'tmp' to hold rendered images.";
-				return;
-			}
-		}
+        auto tmp_dir = fs::path{"tmp"};
+        if (!tmp_dir.exists()) {
+            if (!fs::create_directory(tmp_dir)) {
+                m_camera_path.rendering = false;
+                tlog::error() << "Failed to create temporary directory 'tmp' to hold rendered images.";
+                return;
+            }
+        }
 
         ivec2 res = m_view.render_buffer->out_resolution();
-		const dim3 threads = { 16, 8, 1 };
-		const dim3 blocks = { div_round_up((uint32_t)res.x, threads.x), div_round_up((uint32_t)res.y, threads.y), 1 };
+        const dim3 threads = { 16, 8, 1 };
+        const dim3 blocks = { div_round_up((uint32_t)res.x, threads.x), div_round_up((uint32_t)res.y, threads.y), 1 };
 
-		GPUMemory<uint8_t> image_data(compMul(res) * 3);
-		to_8bit_color_kernel<<<blocks, threads>>>(
-			res,
-			EColorSpace::SRGB, // the GUI always renders in SRGB
+        GPUMemory<uint8_t> image_data(compMul(res) * 3);
+        to_8bit_color_kernel<<<blocks, threads>>>(
+            res,
+            EColorSpace::SRGB, // the GUI always renders in SRGB
             m_view.render_buffer->surface(),
-			image_data.data()
-		);
+            image_data.data()
+        );
 
-		m_render_futures.emplace_back(m_thread_pool.enqueue_task([image_data=std::move(image_data), frame_idx=m_camera_path.render_frame_idx++, res, tmp_dir] {
-			std::vector<uint8_t> cpu_image_data(image_data.size());
-			CUDA_CHECK_THROW(cudaMemcpy(cpu_image_data.data(), image_data.data(), image_data.bytes(), cudaMemcpyDeviceToHost));
-			write_stbi(tmp_dir / fmt::format("{:06d}.jpg", frame_idx), res.x, res.y, 3, cpu_image_data.data(), 100);
-		}));
+        m_render_futures.emplace_back(m_thread_pool.enqueue_task([image_data=std::move(image_data), frame_idx=m_camera_path.render_frame_idx++, res, tmp_dir] {
+            std::vector<uint8_t> cpu_image_data(image_data.size());
+            CUDA_CHECK_THROW(cudaMemcpy(cpu_image_data.data(), image_data.data(), image_data.bytes(), cudaMemcpyDeviceToHost));
+            write_stbi(tmp_dir / fmt::format("{:06d}.jpg", frame_idx), res.x, res.y, 3, cpu_image_data.data(), 100);
+        }));
 
-		reset_accumulation(true);
+        reset_accumulation(true);
 
-		if (m_camera_path.render_frame_idx == m_camera_path.render_settings.n_frames()) {
-			m_camera_path.rendering = false;
+        if (m_camera_path.render_frame_idx == m_camera_path.render_settings.n_frames()) {
+            m_camera_path.rendering = false;
 
-			wait_all(m_render_futures);
-			m_render_futures.clear();
+            wait_all(m_render_futures);
+            m_render_futures.clear();
 
-			tlog::success() << "Finished rendering '.jpg' video frames to '" << tmp_dir << "'. Assembling them into a video next.";
+            tlog::success() << "Finished rendering '.jpg' video frames to '" << tmp_dir << "'. Assembling them into a video next.";
 
-			fs::path ffmpeg = "ffmpeg";
+            fs::path ffmpeg = "ffmpeg";
 
 #ifdef _WIN32
-			// Under Windows, try automatically downloading FFmpeg binaries if they don't exist
-			if (system(fmt::format("where {} >nul 2>nul", ffmpeg.str()).c_str()) != 0) {
-				fs::path dir = root_dir();
-				if ((dir/"external"/"ffmpeg").exists()) {
-					for (const auto& path : fs::directory{dir/"external"/"ffmpeg"}) {
-						ffmpeg = path/"bin"/"ffmpeg.exe";
-					}
-				}
+            // Under Windows, try automatically downloading FFmpeg binaries if they don't exist
+            if (system(fmt::format("where {} >nul 2>nul", ffmpeg.str()).c_str()) != 0) {
+                fs::path dir = root_dir();
+                if ((dir/"external"/"ffmpeg").exists()) {
+                    for (const auto& path : fs::directory{dir/"external"/"ffmpeg"}) {
+                        ffmpeg = path/"bin"/"ffmpeg.exe";
+                    }
+                }
 
-				if (!ffmpeg.exists()) {
-					tlog::info() << "FFmpeg not found. Downloading FFmpeg...";
-					do_system((dir/"scripts"/"download_ffmpeg.bat").str());
-				}
+                if (!ffmpeg.exists()) {
+                    tlog::info() << "FFmpeg not found. Downloading FFmpeg...";
+                    do_system((dir/"scripts"/"download_ffmpeg.bat").str());
+                }
 
-				for (const auto& path : fs::directory{dir/"external"/"ffmpeg"}) {
-					ffmpeg = path/"bin"/"ffmpeg.exe";
-				}
+                for (const auto& path : fs::directory{dir/"external"/"ffmpeg"}) {
+                    ffmpeg = path/"bin"/"ffmpeg.exe";
+                }
 
-				if (!ffmpeg.exists()) {
-					tlog::warning() << "FFmpeg download failed. Trying system-wide FFmpeg.";
-				}
-			}
+                if (!ffmpeg.exists()) {
+                    tlog::warning() << "FFmpeg download failed. Trying system-wide FFmpeg.";
+                }
+            }
 #endif
 
-			auto ffmpeg_command = fmt::format(
-				"{} -loglevel error -y -framerate {} -i tmp/%06d.jpg -c:v libx264 -preset slow -crf {} -pix_fmt yuv420p \"{}\"",
-				ffmpeg.str(),
-				m_camera_path.render_settings.fps,
-				// Quality goes from 0 to 10. This conversion to CRF means a quality of 10
-				// is a CRF of 17 and a quality of 0 a CRF of 27, which covers the "sane"
-				// range of x264 quality settings according to the FFmpeg docs:
-				// https://trac.ffmpeg.org/wiki/Encode/H.264
-				27 - m_camera_path.render_settings.quality,
-				m_camera_path.render_settings.filename
-			);
-			int ffmpeg_result = do_system(ffmpeg_command);
-			if (ffmpeg_result == 0) {
-				tlog::success() << "Saved video '" << m_camera_path.render_settings.filename << "'";
-			} else if (ffmpeg_result == -1) {
-				tlog::error() << "Video could not be assembled: FFmpeg not found.";
-			} else {
-				tlog::error() << "Video could not be assembled: FFmpeg failed";
-			}
+            auto ffmpeg_command = fmt::format(
+                "{} -loglevel error -y -framerate {} -i tmp/%06d.jpg -c:v libx264 -preset slow -crf {} -pix_fmt yuv420p \"{}\"",
+                ffmpeg.str(),
+                m_camera_path.render_settings.fps,
+                // Quality goes from 0 to 10. This conversion to CRF means a quality of 10
+                // is a CRF of 17 and a quality of 0 a CRF of 27, which covers the "sane"
+                // range of x264 quality settings according to the FFmpeg docs:
+                // https://trac.ffmpeg.org/wiki/Encode/H.264
+                27 - m_camera_path.render_settings.quality,
+                m_camera_path.render_settings.filename
+            );
+            int ffmpeg_result = do_system(ffmpeg_command);
+            if (ffmpeg_result == 0) {
+                tlog::success() << "Saved video '" << m_camera_path.render_settings.filename << "'";
+            } else if (ffmpeg_result == -1) {
+                tlog::error() << "Video could not be assembled: FFmpeg not found.";
+            } else {
+                tlog::error() << "Video could not be assembled: FFmpeg failed";
+            }
 
-			clear_tmp_dir();
-		}
-	}
+            clear_tmp_dir();
+        }
+    }
 
-	const auto& rs = m_camera_path.render_settings;
-	m_camera_path.play_time = (float)((double)m_camera_path.render_frame_idx / (double)rs.n_frames());
+    const auto& rs = m_camera_path.render_settings;
+    m_camera_path.play_time = (float)((double)m_camera_path.render_frame_idx / (double)rs.n_frames());
 
     if (m_view.render_buffer->spp() == 0) {
-		set_camera_from_time(m_camera_path.play_time);
-		apply_camera_smoothing(rs.frame_milliseconds());
+        set_camera_from_time(m_camera_path.play_time);
+        apply_camera_smoothing(rs.frame_milliseconds());
 
-		auto smoothed_camera_backup = m_smoothed_camera;
+        auto smoothed_camera_backup = m_smoothed_camera;
 
-		// Compute the camera for the next frame in order to be able to compute motion blur
-		// between it and the current one.
-		set_camera_from_time(m_camera_path.play_time + 1.0f / rs.n_frames());
-		apply_camera_smoothing(rs.frame_milliseconds());
+        // Compute the camera for the next frame in order to be able to compute motion blur
+        // between it and the current one.
+        set_camera_from_time(m_camera_path.play_time + 1.0f / rs.n_frames());
+        apply_camera_smoothing(rs.frame_milliseconds());
 
-		m_camera_path.render_frame_end_camera = m_smoothed_camera;
+        m_camera_path.render_frame_end_camera = m_smoothed_camera;
 
-		// Revert camera such that the next frame will be computed correctly
-		// (Start camera of next frame should be the same as end camera of this frame)
-		set_camera_from_time(m_camera_path.play_time);
-		m_smoothed_camera = smoothed_camera_backup;
-	}
+        // Revert camera such that the next frame will be computed correctly
+        // (Start camera of next frame should be the same as end camera of this frame)
+        set_camera_from_time(m_camera_path.play_time);
+        m_smoothed_camera = smoothed_camera_backup;
+    }
 }
 
 /**
@@ -2639,7 +3044,7 @@ void Testbed::train_and_render(bool skip_rendering) {
         }
     }
 
-    // Make sure all in-use auxiliary GPUs have the latest model and bitfield
+    // Make sure all in-use auxiliary GPUs have the latest model and bitfield.
     std::unordered_set<CudaDevice*> devices_in_use;
     if (m_view.device && devices_in_use.count(m_view.device) == 0) {
         devices_in_use.insert(m_view.device);
@@ -2998,10 +3403,10 @@ bool Testbed::frame() {
         }
     }
 
-	if (m_camera_path.rendering) {
-		prepare_next_camera_path_frame();
-		skip_rendering = false;
-	}
+    if (m_camera_path.rendering) {
+        prepare_next_camera_path_frame();
+        skip_rendering = false;
+    }
 
     if (!skip_rendering || (std::chrono::steady_clock::now() -
                             m_last_gui_draw_time_point) > 25ms) {
@@ -3080,11 +3485,11 @@ void Testbed::set_camera_from_keyframe(const CameraKeyframe& k) {
 }
 
 void Testbed::set_camera_from_time(float t) {
-	if (m_camera_path.keyframes.empty()) {
-		return;
-	}
+    if (m_camera_path.keyframes.empty()) {
+        return;
+    }
 
-	set_camera_from_keyframe(m_camera_path.eval_camera_path(t));
+    set_camera_from_keyframe(m_camera_path.eval_camera_path(t));
 }
 
 void Testbed::update_loss_graph() {
@@ -3235,7 +3640,8 @@ void Testbed::reset_network(bool clear_density_grid) {
 	auto dims = network_dims();
 
 	if (m_testbed_mode == ETestbedMode::Nerf) {
-		m_nerf.training.loss_type = string_to_loss_type(loss_config.value("otype", "L2"));
+        m_nerf.training.loss_type =
+                string_to_loss_type(loss_config.value("otype", "L2"));
 
 		// Some of the Nerf-supported losses are not supported by tcnn::Loss,
 		// so just create a dummy L2 loss there. The NeRF code path will bypass
@@ -3243,7 +3649,8 @@ void Testbed::reset_network(bool clear_density_grid) {
 		loss_config["otype"] = "L2";
 	}
 
-	// Automatically determine certain parameters if we're dealing with the (hash)grid encoding
+    // Automatically determine certain parameters if we're dealing with the
+    // (hash)grid encoding.
 	if (to_lower(encoding_config.value("otype", "OneBlob")).find("grid") != std::string::npos) {
 		encoding_config["n_pos_dims"] = dims.n_pos;
 
@@ -3293,9 +3700,12 @@ void Testbed::reset_network(bool clear_density_grid) {
 
 	size_t n_encoding_params = 0;
 	if (m_testbed_mode == ETestbedMode::Nerf) {
-		m_nerf.training.cam_exposure.resize(m_nerf.training.dataset.n_images, AdamOptimizer<vec3>(1e-3f));
-		m_nerf.training.cam_pos_offset.resize(m_nerf.training.dataset.n_images, AdamOptimizer<vec3>(1e-4f));
-		m_nerf.training.cam_rot_offset.resize(m_nerf.training.dataset.n_images, RotationAdamOptimizer(1e-4f));
+        m_nerf.training.cam_exposure.resize(m_nerf.training.dataset.n_images,
+                                            AdamOptimizer<vec3>(1e-3f));
+        m_nerf.training.cam_pos_offset.resize(m_nerf.training.dataset.n_images,
+                                              AdamOptimizer<vec3>(1e-4f));
+        m_nerf.training.cam_rot_offset.resize(m_nerf.training.dataset.n_images,
+                                              RotationAdamOptimizer(1e-4f));
 		m_nerf.training.cam_focal_length_offset = AdamOptimizer<vec2>(1e-5f);
 
 		m_nerf.training.reset_extra_dims(m_rng);
@@ -3306,13 +3716,15 @@ void Testbed::reset_network(bool clear_density_grid) {
 		uint32_t n_dir_dims = 3;
 		uint32_t n_extra_dims = m_nerf.training.dataset.n_extra_dims();
 
-		// Instantiate an additional model for each auxiliary GPU
+        // Instantiate an additional model for each auxiliary GPU.
 		for (auto& device : m_devices) {
 			device.set_nerf_network(std::make_shared<NerfNetwork<precision_t>>(
 				dims.n_pos,
 				n_dir_dims,
 				n_extra_dims,
-				dims.n_pos + 1, // The offset of 1 comes from the dt member variable of NerfCoordinate. HACKY
+                // The offset of 1 comes from the dt member variable of
+                // NerfCoordinate. HACKY
+                dims.n_pos + 1,
 				encoding_config,
 				dir_encoding_config,
 				network_config,
@@ -3386,7 +3798,7 @@ void Testbed::reset_network(bool clear_density_grid) {
 		}
 
 		for (auto& device : m_devices) {
-			device.set_network(std::make_shared<NetworkWithInputEncoding<precision_t>>(m_encoding, dims.n_output, network_config));
+            device.set_network(std::make_shared<NetworkWithInputEncoding<precision_t>>(m_encoding, dims.n_output, network_config));
 		}
 
 		m_network = primary_device().network();
@@ -3562,7 +3974,7 @@ bool Testbed::clear_tmp_dir() {
 }
 
 void Testbed::train(uint32_t batch_size) {
-	if (!m_training_data_available || m_camera_path.rendering) {
+    if (!m_training_data_available || m_camera_path.rendering) {
 		m_train = false;
 		return;
 	}
@@ -3573,8 +3985,9 @@ void Testbed::train(uint32_t batch_size) {
 
 	set_all_devices_dirty();
 
-	// If we don't have a trainer, as can happen when having loaded training data or changed modes without having
-	// explicitly loaded a new neural network.
+    // If we don't have a trainer, as can happen when having loaded training
+    // data or changed modes without having explicitly loaded a new neural
+    // network.
 	if (!m_trainer) {
 		reload_network_from_file();
 		if (!m_trainer) {
@@ -3644,7 +4057,7 @@ void Testbed::train(uint32_t batch_size) {
 
 	if (get_loss_scalar) {
 		update_loss_graph();
-	}
+    }
 }
 
 vec2 Testbed::calc_focal_length(const ivec2& resolution, const vec2& relative_focal_length, int fov_axis, float zoom) const {
@@ -3766,105 +4179,6 @@ __global__ void spherical_checkerboard_kernel(
 
 	uint32_t idx = x + resolution.x * y;
 	frame_buffer[idx] += (1.0f - frame_buffer[idx].a) * background_color;
-}
-
-__global__ void vr_overlay_hands_kernel(
-    ivec2 resolution,
-    vec2 focal_length,
-    mat4x3 camera,
-    vec2 screen_center,
-    vec3 parallax_shift,
-    Foveation foveation,
-    Lens lens,
-    vec3 left_hand_pos,
-    float left_grab_strength,
-    vec4 left_hand_color,
-    vec3 right_hand_pos,
-    float right_grab_strength,
-    vec4 right_hand_color,
-    float hand_radius,
-    EColorSpace output_color_space,
-    cudaSurfaceObject_t surface
-    // TODO: overwrite depth buffer
-) {
-    uint32_t x = threadIdx.x + blockDim.x * blockIdx.x;
-    uint32_t y = threadIdx.y + blockDim.y * blockIdx.y;
-
-    if (x >= resolution.x || y >= resolution.y) {
-        return;
-    }
-
-    Ray ray = pixel_to_ray(
-        0,
-        {x, y},
-        resolution,
-        focal_length,
-        camera,
-        screen_center,
-        parallax_shift,
-        false,
-        0.0f,
-        1.0f,
-        0.0f,
-        foveation,
-        {}, // No need for hidden area mask
-        lens
-    );
-
-    vec4 color = vec4(0.0f);
-    auto composit_hand = [&](vec3 hand_pos, float grab_strength, vec4 hand_color) {
-        // Don't render the hand indicator if it's behind the ray origin.
-        if (dot(ray.d, hand_pos - ray.o) < 0.0f) {
-            return;
-        }
-
-        float distance = ray.distance_to(hand_pos);
-
-        vec4 base_color = vec4(0.0f);
-        const vec4 border_color = {0.4f, 0.4f, 0.4f, 0.4f};
-
-        // Divide hand radius into an inner part (4/5ths) and a border (1/5th).
-        float radius = hand_radius * 0.8f;
-        float border_width = hand_radius * 0.2f;
-
-        // When grabbing, shrink the inner part as a visual indicator.
-        radius *= 0.5f + 0.5f * (1.0f - grab_strength);
-
-        if (distance < radius) {
-            base_color = hand_color;
-        } else if (distance < radius + border_width) {
-            base_color = border_color;
-        } else {
-            return;
-        }
-
-        // Make hand color opaque when grabbing.
-        base_color.a = grab_strength + (1.0f - grab_strength) * base_color.a;
-        color += base_color * (1.0f - color.a);
-    };
-
-    if (dot(ray.d, left_hand_pos - ray.o) < dot(ray.d, right_hand_pos - ray.o)) {
-        composit_hand(left_hand_pos, left_grab_strength, left_hand_color);
-        composit_hand(right_hand_pos, right_grab_strength, right_hand_color);
-    } else {
-        composit_hand(right_hand_pos, right_grab_strength, right_hand_color);
-        composit_hand(left_hand_pos, left_grab_strength, left_hand_color);
-    }
-
-    // Blend with existing color of pixel
-    vec4 prev_color;
-    surf2Dread((float4*)&prev_color, surface, x * sizeof(float4), y);
-    if (output_color_space == EColorSpace::SRGB) {
-        prev_color.rgb = srgb_to_linear(prev_color.rgb);
-    }
-
-    color += (1.0f - color.a) * prev_color;
-
-    if (output_color_space == EColorSpace::SRGB) {
-        color.rgb = linear_to_srgb(color.rgb);
-    }
-
-    surf2Dwrite(to_float4(color), surface, x * sizeof(float4), y);
 }
 
 void Testbed::render_frame(cudaStream_t stream,
@@ -4248,9 +4562,6 @@ void Testbed::gather_histograms() {
 	}
 }
 
-// Increment this number when making a change to the snapshot format
-static const size_t SNAPSHOT_FORMAT_VERSION = 1;
-
 void Testbed::save_snapshot(const fs::path& path, bool include_optimizer_state, bool compress) {
 	m_network_config["snapshot"] = m_trainer->serialize(include_optimizer_state);
 
@@ -4298,10 +4609,10 @@ void Testbed::save_snapshot(const fs::path& path, bool include_optimizer_state, 
 	snapshot["camera"]["autofocus_depth"] = m_slice_plane_z;
 
 	if (m_testbed_mode == ETestbedMode::Nerf) {
-		snapshot["nerf"]["rgb"]["rays_per_batch"] = m_nerf.training.counters_rgb.rays_per_batch;
-		snapshot["nerf"]["rgb"]["measured_batch_size"] = m_nerf.training.counters_rgb.measured_batch_size;
-		snapshot["nerf"]["rgb"]["measured_batch_size_before_compaction"] = m_nerf.training.counters_rgb.measured_batch_size_before_compaction;
-		snapshot["nerf"]["dataset"] = m_nerf.training.dataset;
+        snapshot["nerf"]["rgb"]["rays_per_batch"] = m_nerf.training.counters_rgb.rays_per_batch;
+        snapshot["nerf"]["rgb"]["measured_batch_size"] = m_nerf.training.counters_rgb.measured_batch_size;
+        snapshot["nerf"]["rgb"]["measured_batch_size_before_compaction"] = m_nerf.training.counters_rgb.measured_batch_size_before_compaction;
+        snapshot["nerf"]["dataset"] = m_nerf.training.dataset;
 	}
 
 	m_network_config_path = path;
@@ -4369,7 +4680,10 @@ void Testbed::load_snapshot(const fs::path& path) {
 		GPUMemory<__half> density_grid_fp16 = snapshot["density_grid_binary"];
 		m_nerf.density_grid.resize(density_grid_fp16.size());
 
-		parallel_for_gpu(density_grid_fp16.size(), [density_grid=m_nerf.density_grid.data(), density_grid_fp16=density_grid_fp16.data()] __device__ (size_t i) {
+        parallel_for_gpu(density_grid_fp16.size(),
+                         [density_grid = m_nerf.density_grid.data(),
+                         density_grid_fp16=density_grid_fp16.data()] __device__
+                         (size_t i) {
 			density_grid[i] = (float)density_grid_fp16[i];
 		});
 
@@ -4410,7 +4724,6 @@ void Testbed::load_snapshot(const fs::path& path) {
 
 	m_network_config_path = path;
 	m_network_config = std::move(config);
-
 	reset_network(false);
 
 	m_training_step = m_network_config["snapshot"]["training_step"];
@@ -4534,15 +4847,15 @@ void Testbed::set_all_devices_dirty() {
 }
 
 void Testbed::load_camera_path(const fs::path& path) {
-	m_camera_path.load(path, mat4x3(1.0f));
+    m_camera_path.load(path, mat4x3(1.0f));
 }
 
 bool Testbed::loop_animation() {
-	return m_camera_path.loop;
+    return m_camera_path.loop;
 }
 
 void Testbed::set_loop_animation(bool value) {
-	m_camera_path.loop = value;
+    m_camera_path.loop = value;
 }
 
 NGP_NAMESPACE_END
