@@ -770,7 +770,7 @@ NerfDataset load_block_nerf_data(const fs::path& path,
         }
         cl::StringSplit(line, ',', &parse);
         if (parse.empty()) continue;
-//        if (parse[0][0] != '2' && parse[0][0] != '5') continue;
+        if (parse[0][0] == '1' || parse[0][0] == '4') continue;
         fs::path image_path = path / "images" / parse[0];
         result.paths.emplace_back(image_path.str());
 

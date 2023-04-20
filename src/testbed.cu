@@ -68,6 +68,7 @@
 
 #include "codelibrary/base/log.h"
 #include "codelibrary/base/index_sort.h"
+#include "codelibrary/geometry/distance_3d.h"
 #include "codelibrary/point_cloud/xyz_io.h"
 
 using namespace std::literals::chrono_literals;
@@ -389,25 +390,14 @@ void Testbed::train_street_view_nerf(const fs::path& path) {
         loader.Load(&m_point_cloud);
     }
 
-    m_block_nerfs.clear();
-
     // Find all blocks.
-    cl::Array<fs::path> block_paths;
-    cl::Array<std::string> blocks;
     for (const auto& block_path : fs::directory(path / "blocks")) {
         std::string block = block_path.basename();
         if (block.empty() || block[0] != 'b') continue;
-        block_paths.push_back(block_path);
-        blocks.push_back(block);
-    }
-    cl::Array<int> seq;
-    cl::IndexSort(blocks.begin(), blocks.end(), &seq);
-
-    for (int i : seq) {
-        load_block_nerf_data(path, blocks[i]);
+        load_block_nerf_data(path, block);
         m_training_data_available = true;
 
-        LOG(INFO) << "Training block: " << blocks[i];
+        LOG(INFO) << "Training block: " << block;
 
         m_train = true;
         int max_training_steps = m_nerf.training.dataset.n_training_steps;
@@ -417,7 +407,7 @@ void Testbed::train_street_view_nerf(const fs::path& path) {
             progress.update(m_training_step);
         }
         m_train = false;
-        this->save_block_nerf(block_paths[i] / "nerf.ingp", true);
+        this->save_block_nerf(block_path / "nerf.ingp", true);
     }
 
     LOG(INFO) << "Done.";
@@ -432,23 +422,24 @@ void Testbed::render_street_view_nerf(const fs::path& path) {
 
     // Find all blocks.
     cl::Array<fs::path> block_paths;
-    cl::Array<std::string> blocks;
+    cl::Array<int> blocks;
     for (const auto& block_path : fs::directory(path / "blocks")) {
         std::string block = block_path.basename();
         if (block.empty() || block[0] != 'b') continue;
         block_paths.push_back(block_path);
-        blocks.push_back(block);
+        blocks.push_back(std::atoi(block.substr(1).c_str()));
     }
     cl::Array<int> seq;
     cl::IndexSort(blocks.begin(), blocks.end(), &seq);
 
+    m_block_nerfs.clear();
     for (int i : seq) {
         // Load trained NeRF.
         this->load_block_nerf(block_paths[i] / "nerf.ingp");
     }
 
     LOG(INFO) << "Loading street view camera poses...";
-    m_camera_poses.clear();
+    m_block_camera_poses.clear();
 
     fs::path camera_pose_path = path / "full_poses.csv";
     CHECK(camera_pose_path.exists()) << camera_pose_path;
@@ -478,22 +469,31 @@ void Testbed::render_street_view_nerf(const fs::path& path) {
                 xform.end[n][m] = std::stof(parse[m * 4 + n + offset]);
             }
         }
-        // Enlarge camera AABB.
-        vec3 p(xform.start[3][0], xform.start[3][1], xform.start[3][2]);
-        m_camera_poses.push_back(p);
+        m_block_camera_poses.emplace_back(xform.start[3][0], xform.start[3][1],
+                                          xform.start[3][2]);
     }
 
-    CHECK(m_camera_poses.size() % 6 == 0);
+    CHECK(m_block_camera_poses.size() % 6 == 0);
     int n_cameras = 0;
-    for (int i = 0; i < m_camera_poses.size(); i += 6) {
-        vec3 center(0, 0, 0);
+    for (int i = 0; i < m_block_camera_poses.size(); i += 6) {
+        cl::RPoint3D center(0, 0, 0);
         for (int j = i; j < i + 6; ++j) {
-            center += m_camera_poses[j];
+            center += m_block_camera_poses[j].ToVector();
         }
         center *= 1.0 / 6.0;
-        m_camera_poses[n_cameras++] = center;
+        m_block_camera_poses[n_cameras++] = center;
     }
-    m_camera_poses.resize(n_cameras);
+    m_block_camera_poses.resize(n_cameras);
+
+    m_block_camera_path = cl::BezierCurve3D<double>(m_block_camera_poses);
+    m_total_camera_path_distance = 0.0;
+    for (int i = 1; i < m_block_camera_poses.size(); ++i) {
+        m_total_camera_path_distance += cl::Distance(m_block_camera_poses[i - 1],
+                            m_block_camera_poses[i]);
+    }
+
+    CHECK(!m_block_nerfs.empty());
+    m_current_block_nerf = &m_block_nerfs.front();
 
     tlog::success() << "Done.";
 }
@@ -519,6 +519,13 @@ void Testbed::save_block_nerf(const fs::path& path, bool compress) {
     snapshot["nerf"]["scale"] = m_nerf.training.dataset.scale;
     snapshot["nerf"]["offset"] = m_nerf.training.dataset.offset;
     snapshot["camera_aabb"] = m_nerf.training.dataset.camera_aabb;
+    vec3 v1 = m_render_aabb.min, v2 = m_render_aabb.max;
+    v1 = (v1 - m_nerf.training.dataset.offset) / m_nerf.training.dataset.scale;
+    v2 = (v2 - m_nerf.training.dataset.offset) / m_nerf.training.dataset.scale;
+    snapshot["nerf_aabb"] = BoundingBox(v1, v2);
+
+    LOG(INFO) << v1.x << " " << v1.y << " " << v1.z;
+    LOG(INFO) << v2.x << " " << v2.y << " " << v2.z;
 
     m_network_config_path = path;
     std::ofstream f{native_string(m_network_config_path),
@@ -547,6 +554,7 @@ void Testbed::load_block_nerf(const fs::path& path) {
     set_mode(ETestbedMode::Nerf);
 
     BlockNeRFModel model;
+    model.id = m_block_nerfs.size();
 
     CHECK(snapshot["density_grid_size"] == NERF_GRIDSIZE()) <<
         "Incompatible grid size.";
@@ -561,6 +569,7 @@ void Testbed::load_block_nerf(const fs::path& path) {
     model.data_scale = m_nerf.training.dataset.scale =
             snapshot["nerf"]["scale"];
     model.camera_aabb = snapshot["camera_aabb"];
+    model.nerf_aabb = snapshot["nerf_aabb"];
 
     load_nerf_post();
 
@@ -698,15 +707,17 @@ void Testbed::reset_nerf_network(BlockNeRFModel& model) {
     set_all_devices_dirty();
 }
 
-void Testbed::set_block_nerf(const BlockNeRFModel& model) {
+/**
+ * Set current block nerf for rendering.
+ */
+void Testbed::set_block_nerf(BlockNeRFModel& model) {
     m_nerf.density_grid.resize(model.density_grid.size());
     m_nerf.density_grid.copy_from_device(model.density_grid);
     this->update_density_grid_mean_and_bitfield(nullptr);
 
-    // Camera position in real world coordinate system.
-
+    // Compute camera position in real world coordinate system.
     vec3 camera_pos = this->view_pos();
-    // The stupid camera coordinate in InstantNGP is (y, z, x)! (maybe my fault?)
+    // The camera coordinate in InstantNGP is (y, z, x)! It is a bug.
     std::swap(camera_pos[1], camera_pos[2]);
     std::swap(camera_pos[0], camera_pos[1]);
     camera_pos = (camera_pos - m_nerf.training.dataset.offset) /
@@ -720,23 +731,17 @@ void Testbed::set_block_nerf(const BlockNeRFModel& model) {
     m_nerf.training.dataset.offset = model.data_offset;
     m_nerf.training.dataset.scale = model.data_scale;
 
-
-    m_rng = default_rng_t{m_seed};
-    // Start with a low rendering resolution and gradually ramp up
-    m_render_ms.set(10000);
-    reset_accumulation();
-    m_loss_graph_samples = 0;
+    reset_accumulation(true);
 
     m_optimizer = model.optimizer;
     m_network = m_nerf_network = model.network;
-
-    m_training_step = 0;
-    m_training_start_time_point = std::chrono::steady_clock::now();
 
     // Instantiate an additional model for each auxiliary GPU.
     for (auto& device : m_devices) {
         device.set_nerf_network(model.network);
     }
+
+    m_current_block_nerf = &model;
 
     set_all_devices_dirty();
 }
@@ -1069,7 +1074,7 @@ void Testbed::imgui() {
                 float w = ImGui::GetContentRegionAvail().x;
                 if (m_camera_path.update_cam_from_path) {
                     m_picture_in_picture_res = 0;
-                    ImGui::Image((ImTextureID)(size_t)m_rgba_render_texture->texture(),
+                    ImGui::Image((ImTextureID)(size_t)m_rgba_render_textures.front()->texture(),
                                  ImVec2(w, w * 9.0f / 16.0f));
                 } else {
                     m_picture_in_picture_res = (float)std::min((int(w) + 31) & (~31), 1920 / 4);
@@ -1135,13 +1140,23 @@ void Testbed::imgui() {
             ImGui::InputText("File##Video file path", m_imgui.video_path, sizeof(m_imgui.video_path));
             m_camera_path.render_settings.filename = m_imgui.video_path;
 
-            ImGui::InputInt2("Resolution", &m_camera_path.render_settings.resolution.x);
-            ImGui::InputFloat("Duration (seconds)", &m_camera_path.render_settings.duration_seconds);
-            ImGui::InputFloat("FPS (frames/second)", &m_camera_path.render_settings.fps);
-            ImGui::InputInt("SPP (samples/pixel)", &m_camera_path.render_settings.spp);
-            ImGui::SliderInt("Quality", &m_camera_path.render_settings.quality, 0, 10);
+            ImGui::InputInt2("Resolution",
+                             &m_camera_path.render_settings.resolution.x);
+            ImGui::InputFloat("Duration (seconds)",
+                              &m_camera_path.render_settings.duration_seconds);
+            ImGui::InputFloat("FPS (frames/second)",
+                              &m_camera_path.render_settings.fps);
+            ImGui::InputInt("SPP (samples/pixel)",
+                            &m_camera_path.render_settings.spp);
+            ImGui::SliderInt("Quality",
+                             &m_camera_path.render_settings.quality,
+                             0,
+                             10);
 
-            ImGui::SliderFloat("Shutter fraction", &m_camera_path.render_settings.shutter_fraction, 0.0f, 1.0f);
+            ImGui::SliderFloat("Shutter fraction",
+                               &m_camera_path.render_settings.shutter_fraction,
+                               0.0f,
+                               1.0f);
 
             if (m_camera_path.rendering) { ImGui::EndDisabled(); }
         }
@@ -1758,6 +1773,23 @@ void Testbed::imgui() {
                 if (ImGui::SliderInt("Block nerf view", &block_nerf_id, 0,
                                      (int)m_block_nerfs.size() - 1)) {
                     set_block_nerf(m_block_nerfs[block_nerf_id]);
+                }
+
+                if (!m_block_camera_poses.empty() && !m_block_nerfs.empty()) {
+                    if (ImGui::Button("Play block NeRF")) {
+                        m_current_camera_path_distance = 0.0;
+                        m_play_block_nerf = true;
+                        set_block_nerf(m_block_nerfs.front());
+                    }
+                    ImGui::SameLine();
+                    if (m_play_block_nerf && ImGui::Button("Pause")) {
+                        m_play_block_nerf = false;
+                    }
+                    if (!m_play_block_nerf && ImGui::Button("Go on")) {
+                        m_play_block_nerf = true;
+                    }
+                    ImGui::SliderInt("Camera speed", &m_block_nerf_camera_speed,
+                                     1, 20);
                 }
             }
 
@@ -2526,8 +2558,8 @@ void Testbed::init_opengl_shaders() {
 	static const char* shader_frag = R"(#version 140
 		in vec2 UVs;
 		out vec4 frag_color;
-		uniform sampler2D rgba_texture;
-		uniform sampler2D depth_texture;
+        uniform sampler2D rgba_texture, rgba_texture1;
+        uniform sampler2D depth_texture, depth_texture1;
 
 		struct FoveationWarp {
 			float al, bl, cl;
@@ -2559,10 +2591,16 @@ void Testbed::init_opengl_shaders() {
 			vec2 tex_coords = UVs;
 			tex_coords.y = 1.0 - tex_coords.y;
 			tex_coords = unwarp(tex_coords);
-			frag_color = texture(rgba_texture, tex_coords.xy);
+            vec4 c = texture(rgba_texture, tex_coords.xy);
+            float d = texture(depth_texture, tex_coords.xy).r;
+            c = mix(c, texture(rgba_texture1, tex_coords.xy),
+                    step(length(c.rgb), 0.01));
+            d = mix(d, texture(depth_texture1, tex_coords.xy).r,
+                    step(length(c.rgb), 0.01));
+            frag_color = c;
 			//Uncomment the following line of code to visualize debug the depth buffer for debugging.
-			// frag_color = vec4(vec3(texture(depth_texture, tex_coords.xy).r), 1.0);
-			gl_FragDepth = texture(depth_texture, tex_coords.xy).r;
+            // frag_color = vec4(vec3(texture(depth_texture1, tex_coords.xy).r), 1.0);
+            gl_FragDepth = d;
 		})";
 
 	GLuint vert = glCreateShader(GL_VERTEX_SHADER);
@@ -2587,7 +2625,13 @@ void Testbed::init_opengl_shaders() {
 	glGenVertexArrays(1, &m_blit_vao);
 }
 
-void Testbed::blit_texture(const Foveation& foveation, GLint rgba_texture, GLint rgba_filter_mode, GLint depth_texture, GLint framebuffer, const ivec2& offset, const ivec2& resolution) {
+void Testbed::blit_texture(const Foveation& foveation,
+                           GLint rgba_texture,
+                           GLint rgba_filter_mode,
+                           GLint depth_texture,
+                           GLint framebuffer,
+                           const ivec2& offset,
+                           const ivec2& resolution) {
 	if (m_blit_program == 0) {
 		return;
 	}
@@ -2651,7 +2695,7 @@ void Testbed::blit_texture(const Foveation& foveation, GLint rgba_texture, GLint
 	glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
 	glViewport(offset.x, offset.y, resolution.x, resolution.y);
 
-	glDrawArrays(GL_TRIANGLES, 0, 3);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
 
 	glBindVertexArray(0);
 	glUseProgram(0);
@@ -2665,12 +2709,114 @@ void Testbed::blit_texture(const Foveation& foveation, GLint rgba_texture, GLint
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+void Testbed::blit_textures(const Foveation& foveation,
+                            GLint rgba_texture,
+                            GLint rgba_texture1,
+                            GLint rgba_filter_mode,
+                            GLint depth_texture,
+                            GLint depth_texture1,
+                            GLint framebuffer,
+                            const ivec2& offset,
+                            const ivec2& resolution) {
+    if (m_blit_program == 0) {
+        return;
+    }
+
+    // Blit image to OpenXR swapchain.
+    // Note that the OpenXR swapchain is 8bit while the rendering is in a float texture.
+    // As some XR runtimes do not support float swapchains, we can't render into it directly.
+
+    bool tex = glIsEnabled(GL_TEXTURE_2D);
+    bool depth = glIsEnabled(GL_DEPTH_TEST);
+    bool cull = glIsEnabled(GL_CULL_FACE);
+
+    if (!tex) glEnable(GL_TEXTURE_2D);
+    if (!depth) glEnable(GL_DEPTH_TEST);
+    if (cull) glDisable(GL_CULL_FACE);
+
+    glDepthFunc(GL_ALWAYS);
+    glDepthMask(GL_TRUE);
+
+    glBindVertexArray(m_blit_vao);
+    glUseProgram(m_blit_program);
+    glUniform1i(glGetUniformLocation(m_blit_program, "rgba_texture"), 0);
+    glUniform1i(glGetUniformLocation(m_blit_program, "depth_texture"), 1);
+    glUniform1i(glGetUniformLocation(m_blit_program, "rgba_texture1"), 2);
+    glUniform1i(glGetUniformLocation(m_blit_program, "depth_texture1"), 3);
+
+    auto bind_warp = [&](const FoveationPiecewiseQuadratic& warp, const std::string& uniform_name) {
+        glUniform1f(glGetUniformLocation(m_blit_program, (uniform_name + ".al").c_str()), warp.al);
+        glUniform1f(glGetUniformLocation(m_blit_program, (uniform_name + ".bl").c_str()), warp.bl);
+        glUniform1f(glGetUniformLocation(m_blit_program, (uniform_name + ".cl").c_str()), warp.cl);
+
+        glUniform1f(glGetUniformLocation(m_blit_program, (uniform_name + ".am").c_str()), warp.am);
+        glUniform1f(glGetUniformLocation(m_blit_program, (uniform_name + ".bm").c_str()), warp.bm);
+
+        glUniform1f(glGetUniformLocation(m_blit_program, (uniform_name + ".ar").c_str()), warp.ar);
+        glUniform1f(glGetUniformLocation(m_blit_program, (uniform_name + ".br").c_str()), warp.br);
+        glUniform1f(glGetUniformLocation(m_blit_program, (uniform_name + ".cr").c_str()), warp.cr);
+
+        glUniform1f(glGetUniformLocation(m_blit_program, (uniform_name + ".switch_left").c_str()), warp.switch_left);
+        glUniform1f(glGetUniformLocation(m_blit_program, (uniform_name + ".switch_right").c_str()), warp.switch_right);
+
+        glUniform1f(glGetUniformLocation(m_blit_program, (uniform_name + ".inv_switch_left").c_str()), warp.inv_switch_left);
+        glUniform1f(glGetUniformLocation(m_blit_program, (uniform_name + ".inv_switch_right").c_str()), warp.inv_switch_right);
+    };
+
+    bind_warp(foveation.warp_x, "warp_x");
+    bind_warp(foveation.warp_y, "warp_y");
+
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, depth_texture1);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, rgba_texture1);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, rgba_filter_mode);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, rgba_filter_mode);
+
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, depth_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, rgba_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, rgba_filter_mode);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, rgba_filter_mode);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glViewport(offset.x, offset.y, resolution.x, resolution.y);
+
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    glBindVertexArray(0);
+    glUseProgram(0);
+
+    glDepthFunc(GL_LESS);
+
+    // restore old state
+    if (!tex) glDisable(GL_TEXTURE_2D);
+    if (!depth) glDisable(GL_DEPTH_TEST);
+    if (cull) glEnable(GL_CULL_FACE);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 void Testbed::draw_gui() {
 	// Make sure all the cuda code finished its business here
 	CUDA_CHECK_THROW(cudaDeviceSynchronize());
 
-    if (m_rgba_render_texture.get()) {
-        m_second_window.draw((GLuint)m_rgba_render_texture->texture());
+    if (!m_rgba_render_textures.empty()) {
+        m_second_window.draw((GLuint)m_rgba_render_textures.front()->texture());
 	}
 
 	glfwMakeContextCurrent(m_glfw_window);
@@ -2685,20 +2831,31 @@ void Testbed::draw_gui() {
 	glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
     ivec2 extent = ivec2(display_w, display_h);
+    ivec2 top_left{0, display_h - extent.y};
 
     auto& view = m_view;
-    ivec2 top_left{0, display_h - extent.y};
-    blit_texture(m_foveated_rendering_visualize ? Foveation{} : view.foveation,
-                 m_rgba_render_texture->texture(),
-                 m_foveated_rendering ? GL_LINEAR : GL_NEAREST,
-                 m_depth_render_texture->texture(),
-                 0,
-                 top_left,
-                 extent);
+    if (m_rgba_render_textures.size() == 1) {
+        blit_texture(m_foveated_rendering_visualize ? Foveation{} : view.foveation,
+                     m_rgba_render_textures.front()->texture(),
+                     m_foveated_rendering ? GL_LINEAR : GL_NEAREST,
+                     m_depth_render_textures.front()->texture(),
+                     0,
+                     top_left,
+                     extent);
+    } else if (m_rgba_render_textures.size() == 2) {
+        blit_textures(m_foveated_rendering_visualize ? Foveation{} : view.foveation,
+                     m_rgba_render_textures.front()->texture(),
+                     m_rgba_render_textures.back()->texture(),
+                     m_foveated_rendering ? GL_LINEAR : GL_NEAREST,
+                     m_depth_render_textures.front()->texture(),
+                     m_depth_render_textures.back()->texture(),
+                     0,
+                     top_left,
+                     extent);
+    }
 
     glFinish();
 	glViewport(0, 0, display_w, display_h);
-
 
 	ImDrawList* list = ImGui::GetBackgroundDrawList();
 	list->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
@@ -2719,6 +2876,7 @@ void Testbed::draw_gui() {
         list->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
     }
 
+    // Draw assiant objects.
     draw_visualizations(list, m_smoothed_camera);
 
 	if (m_render_ground_truth) {
@@ -3072,8 +3230,8 @@ void Testbed::train_and_render(bool skip_rendering) {
         m_view.prev_foveation = m_view.foveation;
     }
 
-    m_rgba_render_texture->blit_from_cuda_mapping();
-    m_depth_render_texture->blit_from_cuda_mapping();
+    m_rgba_render_textures.front()->blit_from_cuda_mapping();
+    m_depth_render_textures.front()->blit_from_cuda_mapping();
 
     if (m_picture_in_picture_res > 0) {
         ivec2 res(m_picture_in_picture_res, m_picture_in_picture_res * 9/16);
@@ -3093,6 +3251,179 @@ void Testbed::train_and_render(bool skip_rendering) {
 
 	CUDA_CHECK_THROW(cudaStreamSynchronize(m_stream.get()));
 }
+
+void Testbed::render_block_nerf(bool skip_rendering) {
+    // Don't do any smoothing here if a camera path is being rendered.
+    // It'll take care of the smoothing on its own.
+    float frame_ms = m_camera_path.rendering ? 0.0f : m_frame_ms.val();
+    apply_camera_smoothing(frame_ms);
+
+    if (!m_render_window || !m_render || skip_rendering) {
+        return;
+    }
+
+    auto start = std::chrono::steady_clock::now();
+    ScopeGuard timing_guard{[&]() {
+        m_render_ms.update(std::chrono::duration<float, std::milli>(
+                           std::chrono::steady_clock::now() - start).count());
+    }};
+
+    if (norm(m_smoothed_camera - m_camera) < 0.001f) {
+        m_smoothed_camera = m_camera;
+    } else if (!m_camera_path.rendering) {
+        reset_accumulation(true);
+    }
+
+    if (m_autofocus) {
+        autofocus();
+    }
+
+#ifdef NGP_GUI
+    m_view.full_resolution = m_window_res;
+    m_view.camera0 = m_smoothed_camera;
+
+    // Motion blur over the fraction of time that the shutter is open.
+    // Interpolate in log-space to preserve rotations.
+    m_view.camera1 = m_camera_path.rendering ?
+                camera_lerp(m_smoothed_camera,
+                            m_camera_path.render_frame_end_camera,
+                            m_camera_path.render_settings.shutter_fraction)
+              : m_view.camera0;
+
+    m_view.visualized_dimension = m_visualized_dimension;
+    m_view.relative_focal_length = m_relative_focal_length;
+    m_view.screen_center = m_screen_center;
+    m_view.render_buffer->set_hidden_area_mask(nullptr);
+    m_view.foveation = {};
+    m_view.device = &primary_device();
+
+    // Update dynamic res and DLSS.
+    {
+        // Don't count the time being spent allocating buffers and resetting
+        // DLSS as part of the frame time.
+        // Otherwise the dynamic resolution calculations for following frames
+        // will be thrown out of whack and may even start oscillating.
+        auto skip_start = std::chrono::steady_clock::now();
+        ScopeGuard skip_timing_guard{[&]() {
+            start += std::chrono::steady_clock::now() - skip_start;
+        }};
+
+        size_t n_pixels = compMul(m_view.render_buffer->in_resolution());
+        size_t n_pixels_full_res = compMul(m_view.full_resolution);
+
+        float pixel_ratio = (n_pixels == 0 || (m_train && m_training_step == 0)) ? (1.0f / 256.0f) : ((float)n_pixels / (float)n_pixels_full_res);
+
+        float last_factor = std::sqrt(pixel_ratio);
+        float factor = std::sqrt(pixel_ratio / m_render_ms.val() * 1000.0f /
+                                 m_dynamic_res_target_fps);
+        if (!m_dynamic_res) {
+            factor = 8.f / (float)m_fixed_res_factor;
+        }
+
+        factor = tcnn::clamp(factor, 1.0f / 16.0f, 1.0f);
+
+        m_view.render_buffer->disable_dlss();
+
+        ivec2 render_res = m_view.render_buffer->in_resolution();
+        ivec2 new_render_res = clamp(ivec2(vec2(m_view.full_resolution) * factor),
+                                     m_view.full_resolution / 16,
+                                     m_view.full_resolution);
+
+        if (m_camera_path.rendering) {
+            new_render_res = m_camera_path.render_settings.resolution;
+        }
+
+        float ratio = std::sqrt((float)compMul(render_res) / (float)compMul(new_render_res));
+        if (ratio > 1.2f || ratio < 0.8f || factor == 1.0f || !m_dynamic_res || m_camera_path.rendering) {
+            render_res = new_render_res;
+        }
+
+        m_view.render_buffer->resize(render_res);
+
+        if (m_foveated_rendering) {
+            if (m_dynamic_foveated_rendering) {
+                vec2 resolution_scale = vec2(render_res) / vec2(m_view.full_resolution);
+
+                // Only start foveation when DLSS if off or if DLSS is asked to do more than 1.5x upscaling.
+                // The reason for the 1.5x threshold is that DLSS can do up to 3x upscaling, at which point a foveation
+                // factor of 2x = 3.0x/1.5x corresponds exactly to bilinear super sampling, which is helpful in
+                // suppressing DLSS's artifacts.
+                float foveation_begin_factor = m_dlss ? 1.5f : 1.0f;
+
+                resolution_scale = clamp(resolution_scale * foveation_begin_factor, vec2(1.0f / m_foveated_rendering_max_scaling), vec2(1.0f));
+                m_view.foveation = {resolution_scale,
+                                    vec2(1.0f) - m_view.screen_center,
+                                    vec2(m_foveated_rendering_full_res_diameter * 0.5f)};
+
+                m_foveated_rendering_scaling = 2.0f / compAdd(resolution_scale);
+            } else {
+                m_view.foveation = {vec2(1.0f / m_foveated_rendering_scaling),
+                                    vec2(1.0f) - m_view.screen_center,
+                                    vec2(m_foveated_rendering_full_res_diameter * 0.5f)};
+            }
+        } else {
+            m_view.foveation = {};
+        }
+    }
+
+    // Make sure all in-use auxiliary GPUs have the latest model and bitfield.
+    std::unordered_set<CudaDevice*> devices_in_use;
+    if (m_view.device && devices_in_use.count(m_view.device) == 0) {
+        devices_in_use.insert(m_view.device);
+        sync_device(*m_view.render_buffer, *m_view.device);
+    }
+
+    {
+        auto device_guard = use_device(m_stream.get(), *m_view.render_buffer,
+                                       *m_view.device);
+
+        //--------------------------------------------------------------
+        // Main rendering code is here.
+        render_frame_main(*m_view.device,
+                          m_view.camera0,
+                          m_view.camera1,
+                          m_view.screen_center,
+                          m_view.relative_focal_length,
+                          {0.0f, 0.0f, 0.0f, 1.0f},
+                          m_view.foveation,
+                          m_view.visualized_dimension);
+        render_frame_epilogue(m_stream.get(),
+                              m_view.camera0,
+                              m_view.prev_camera,
+                              m_view.screen_center,
+                              m_view.relative_focal_length,
+                              m_view.foveation,
+                              m_view.prev_foveation,
+                              *m_view.render_buffer,
+                              true);
+        //------------------------------------------------------------------
+
+        m_view.prev_camera = m_view.camera0;
+        m_view.prev_foveation = m_view.foveation;
+    }
+
+    m_rgba_render_textures.front()->blit_from_cuda_mapping();
+    m_depth_render_textures.front()->blit_from_cuda_mapping();
+
+    if (m_picture_in_picture_res > 0) {
+        ivec2 res(m_picture_in_picture_res, m_picture_in_picture_res * 9/16);
+        m_pip_render_buffer->resize(res);
+        if (m_pip_render_buffer->spp() < 8) {
+            // A bit gross, but let's copy the keyframe's state into the global state in order to not have to plumb through the fov etc to render_frame.
+            CameraKeyframe backup = copy_camera_to_keyframe();
+            CameraKeyframe pip_kf = m_camera_path.eval_camera_path(m_camera_path.play_time);
+            set_camera_from_keyframe(pip_kf);
+            render_frame(m_stream.get(), pip_kf.m(), pip_kf.m(), pip_kf.m(), m_screen_center, m_relative_focal_length, vec4(0.0f), {}, {}, m_visualized_dimension, *m_pip_render_buffer);
+            set_camera_from_keyframe(backup);
+
+            m_pip_render_texture->blit_from_cuda_mapping();
+        }
+    }
+#endif
+
+    CUDA_CHECK_THROW(cudaStreamSynchronize(m_stream.get()));
+}
+
 
 #ifdef NGP_GUI
 void Testbed::create_second_window() {
@@ -3311,12 +3642,14 @@ void Testbed::init_window(int resw, int resh, bool hidden, bool second_window) {
 
 	init_opengl_shaders();
 
-    // Make sure there's at least one usable render texture
-    m_rgba_render_texture = std::make_shared<GLTexture>();
-    m_depth_render_texture = std::make_shared<GLTexture>();
+    // Make sure there's at least one usable render texture.
+    m_rgba_render_textures = {std::make_shared<GLTexture>()};
+    m_depth_render_textures = {std::make_shared<GLTexture>()};
 
-    m_view = View{std::make_shared<CudaRenderBuffer>(m_rgba_render_texture,
-                                                     m_depth_render_texture)};
+    m_view.render_buffer = std::make_shared<CudaRenderBuffer>(
+                                m_rgba_render_textures.front(),
+                                m_depth_render_textures.front());
+
     m_view.full_resolution = m_window_res;
     m_view.render_buffer->resize(m_view.full_resolution);
 
@@ -3339,8 +3672,8 @@ void Testbed::destroy_window() {
 		throw std::runtime_error{"Window must be initialized to be destroyed."};
 	}
 
-    m_rgba_render_texture.reset();
-    m_depth_render_texture.reset();
+    m_rgba_render_textures.clear();
+    m_depth_render_textures.clear();
 
 	m_pip_render_buffer.reset();
 	m_pip_render_texture.reset();
@@ -3376,6 +3709,63 @@ bool Testbed::frame() {
     }
 #endif
 
+    if (m_play_block_nerf && m_current_block_nerf) {
+        double dis = m_current_camera_path_distance +
+                     m_block_nerf_camera_speed * m_frame_ms.val() * 0.001;
+        double rate = dis / m_total_camera_path_distance;
+        if (rate > 1.0) {
+            m_play_block_nerf = false;
+        }
+        m_fps_camera = true;
+        cl::RPoint3D p = m_block_camera_path.GetCurvePoint(cl::Clamp(rate, 0.0, 1.0));
+
+        BlockNeRFModel* current_block_nerf = m_current_block_nerf;
+        int next = m_current_block_nerf->id + 1;
+        if (next == m_block_nerfs.size()) {
+            m_play_block_nerf = false;
+        } else {
+            // Find the current block.
+            BlockNeRFModel* next_block_nerf = &m_block_nerfs[next];
+            vec3 v1 = current_block_nerf->camera_aabb.center();
+            cl::RPoint3D c1(v1.x, v1.y, v1.z);
+            vec3 v2 = next_block_nerf->camera_aabb.center();
+            cl::RPoint3D c2(v2.x, v2.y, v2.z);
+            if (cl::Distance(p, c1) > cl::Distance(p, c2)) {
+                current_block_nerf = next_block_nerf;
+            }
+
+            this->set_block_nerf(*current_block_nerf);
+            this->reset_accumulation(true);
+
+            p = p * m_current_block_nerf->data_scale +
+                    cl::RVector3D(m_current_block_nerf->data_offset.x,
+                                  m_current_block_nerf->data_offset.y,
+                                  m_current_block_nerf->data_offset.z);
+            m_camera[3] = vec3(p.y, p.z, p.x);
+            m_current_camera_path_distance = dis;
+
+            // Find all blocks that overlap the current camera.
+            int next = m_current_block_nerf->id + 1;
+            if (next == m_block_nerfs.size()) {
+                m_play_block_nerf = false;
+            } else {
+                BlockNeRFModel* next_block_nerf = &m_block_nerfs[next];
+                m_current_block_nerfs.clear();
+                m_current_block_nerfs.push_back(m_current_block_nerf);
+                m_current_block_nerfs.push_back(next_block_nerf);
+
+                while (m_rgba_render_textures.size() < m_current_block_nerfs.size()) {
+                    m_rgba_render_textures.emplace_back(std::make_shared<GLTexture>());
+                    m_depth_render_textures.emplace_back(std::make_shared<GLTexture>());
+                }
+            }
+        }
+    } else if (!m_play_block_nerf) {
+        m_current_block_nerfs.resize(1);
+        m_rgba_render_textures.resize(1);
+        m_depth_render_textures.resize(1);
+    }
+
     // Render against the trained neural network. If we're training and already
     // close to convergence, we can skip rendering if the scene camera doesn't
     // change.
@@ -3387,7 +3777,8 @@ bool Testbed::frame() {
     bool skip_rendering =
             m_render_skip_due_to_lack_of_camera_movement_counter++ != 0;
 
-    if (!m_dlss && m_max_spp > 0 && m_view.render_buffer.get() &&
+    if (!m_dlss && m_max_spp > 0 &&
+        m_view.render_buffer.get() &&
         m_view.render_buffer->spp() >= m_max_spp) {
         skip_rendering = true;
         if (!m_train) {
@@ -3414,7 +3805,23 @@ bool Testbed::frame() {
     //--------------------------------------------------------------------------
     // Main function!!
     //--------------------------------------------------------------------------
-    train_and_render(skip_rendering);
+    if (!m_play_block_nerf)
+        train_and_render(skip_rendering);
+    else {
+        // Render the nerf into rgba texture and depth texture.
+        for (int i = m_current_block_nerfs.size() - 1; i >= 0; --i) {
+            // Find the current block.
+            this->set_block_nerf(*m_current_block_nerfs[i]);
+            this->reset_accumulation(true);
+
+            ivec2 render_res = m_view.render_buffer->in_resolution();
+            m_view.render_buffer = std::make_shared<CudaRenderBuffer>(m_rgba_render_textures[i],
+                                                                      m_depth_render_textures[i]);
+            m_view.render_buffer->disable_dlss();
+            m_view.render_buffer->resize(render_res);
+            render_block_nerf(skip_rendering);
+        }
+    }
     //--------------------------------------------------------------------------
 
     if (m_testbed_mode == ETestbedMode::Sdf && m_sdf.calculate_iou_online) {
@@ -3679,12 +4086,12 @@ void Testbed::reset_network(bool clear_density_grid) {
 			encoding_config["per_level_scale"] = m_per_level_scale;
 		}
 
-        tlog::info() << "GridEncoding: "
-                     << " Nmin=" << m_base_grid_resolution
-                     << " b=" << m_per_level_scale
-                     << " F=" << m_n_features_per_level
-                     << " T=2^" << log2_hashmap_size
-                     << " L=" << m_n_levels;
+//        tlog::info() << "GridEncoding: "
+//                     << " Nmin=" << m_base_grid_resolution
+//                     << " b=" << m_per_level_scale
+//                     << " F=" << m_n_features_per_level
+//                     << " T=2^" << log2_hashmap_size
+//                     << " L=" << m_n_levels;
 	}
 
 	m_loss.reset(create_loss<precision_t>(loss_config));
@@ -3729,21 +4136,21 @@ void Testbed::reset_network(bool clear_density_grid) {
 		m_encoding = m_nerf_network->pos_encoding();
 		n_encoding_params = m_encoding->n_params() + m_nerf_network->dir_encoding()->n_params();
 
-        tlog::info() << "Density model: " << dims.n_pos
-                     << "--[" << std::string(encoding_config["otype"])
-                     << "]-->" << m_nerf_network->pos_encoding()->padded_output_width()
-                     << "--[" << std::string(network_config["otype"])
-                     << "(neurons=" << (int)network_config["n_neurons"]
-                     << ",layers=" << ((int)network_config["n_hidden_layers"]+2) << ")"
-                     << "]-->" << 1;
+//        tlog::info() << "Density model: " << dims.n_pos
+//                     << "--[" << std::string(encoding_config["otype"])
+//                     << "]-->" << m_nerf_network->pos_encoding()->padded_output_width()
+//                     << "--[" << std::string(network_config["otype"])
+//                     << "(neurons=" << (int)network_config["n_neurons"]
+//                     << ",layers=" << ((int)network_config["n_hidden_layers"]+2) << ")"
+//                     << "]-->" << 1;
 
-        tlog::info() << "Color model:   " << n_dir_dims
-                     << "--[" << std::string(dir_encoding_config["otype"])
-                     << "]-->" << m_nerf_network->dir_encoding()->padded_output_width() << "+" << network_config.value("n_output_dims", 16u)
-                     << "--[" << std::string(rgb_network_config["otype"])
-                     << "(neurons=" << (int)rgb_network_config["n_neurons"]
-                     << ",layers=" << ((int)rgb_network_config["n_hidden_layers"]+2) << ")"
-                     << "]-->" << 3;
+//        tlog::info() << "Color model:   " << n_dir_dims
+//                     << "--[" << std::string(dir_encoding_config["otype"])
+//                     << "]-->" << m_nerf_network->dir_encoding()->padded_output_width() << "+" << network_config.value("n_output_dims", 16u)
+//                     << "--[" << std::string(rgb_network_config["otype"])
+//                     << "(neurons=" << (int)rgb_network_config["n_neurons"]
+//                     << ",layers=" << ((int)rgb_network_config["n_hidden_layers"]+2) << ")"
+//                     << "]-->" << 3;
 
 
 		// Create distortion map model
@@ -3797,12 +4204,12 @@ void Testbed::reset_network(bool clear_density_grid) {
 
 		n_encoding_params = m_encoding->n_params();
 
-        tlog::info() << "Model:         " << dims.n_input
-                     << "--[" << std::string(encoding_config["otype"])
-                     << "]-->" << m_encoding->padded_output_width()
-                     << "--[" << std::string(network_config["otype"])
-                     << "(neurons=" << (int)network_config["n_neurons"] << ",layers=" << ((int)network_config["n_hidden_layers"]+2) << ")"
-                     << "]-->" << dims.n_output;
+//        tlog::info() << "Model:         " << dims.n_input
+//                     << "--[" << std::string(encoding_config["otype"])
+//                     << "]-->" << m_encoding->padded_output_width()
+//                     << "--[" << std::string(network_config["otype"])
+//                     << "(neurons=" << (int)network_config["n_neurons"] << ",layers=" << ((int)network_config["n_hidden_layers"]+2) << ")"
+//                     << "]-->" << dims.n_output;
 	}
 
 	size_t n_network_params = m_network->n_params() - n_encoding_params;

@@ -33,6 +33,7 @@
 
 #include "codelibrary/base/array.h"
 #include "codelibrary/geometry/point_3d.h"
+#include "codelibrary/geometry/bezier_curve_3d.h"
 
 #ifdef NGP_PYTHON
 #  include <pybind11/pybind11.h>
@@ -268,7 +269,9 @@ public:
      * NeRF model for one block.
      */
     struct BlockNeRFModel {
+        int id;
         BoundingBox camera_aabb;
+        BoundingBox nerf_aabb;
         float data_scale;
         vec3 data_offset;
         tcnn::GPUMemory<float> density_grid;
@@ -381,7 +384,7 @@ public:
     static ELossType string_to_loss_type(const std::string& str);
     void reset_network(bool clear_density_grid = true);
     void reset_nerf_network(BlockNeRFModel& model);
-    void set_block_nerf(const BlockNeRFModel& model);
+    void set_block_nerf(BlockNeRFModel& model);
     void load_nerf(const fs::path& data_path);
     void load_nerf_post();
     void load_block_nerf_data(const fs::path& path, const std::string& block);
@@ -480,6 +483,7 @@ public:
     void prepare_next_camera_path_frame();
     void draw_visualizations(ImDrawList* list, const mat4x3& camera_matrix);
     void train_and_render(bool skip_rendering);
+    void render_block_nerf(bool skip_rendering);
     fs::path training_data_path() const;
     void init_window(int resw, int resh, bool hidden = false, bool second_window = false);
     void destroy_window();
@@ -586,14 +590,12 @@ public:
     mat4x3 m_smoothed_camera = mat4x3(1.0f);
     size_t m_render_skip_due_to_lack_of_camera_movement_counter = 0;
 
-    CameraPath m_camera_path = {};
-
     bool m_fps_camera = false;
     bool m_camera_smoothing = false;
     bool m_autofocus = false;
     vec3 m_autofocus_target = vec3(0.5f);
 
-    //CameraPath m_camera_path = {};
+    CameraPath m_camera_path = {};
 
     vec3 m_up_dir = {0.0f, 1.0f, 0.0f};
     vec3 m_sun_dir = normalize(vec3(1.0f));
@@ -623,12 +625,21 @@ public:
 
     void init_opengl_shaders();
     void blit_texture(const Foveation& foveation, GLint rgba_texture, GLint rgba_filter_mode, GLint depth_texture, GLint framebuffer, const ivec2& offset, const ivec2& resolution);
+    void blit_textures(const Foveation& foveation,
+                       GLint rgba_texture,
+                       GLint rgba_texture1,
+                       GLint rgba_filter_mode,
+                       GLint depth_texture,
+                       GLint depth_texture1,
+                       GLint framebuffer,
+                       const ivec2& offset,
+                       const ivec2& resolution);
     void create_second_window();
 
     std::function<bool()> m_keyboard_event_callback;
     std::shared_ptr<GLTexture> m_pip_render_texture;
-    std::shared_ptr<GLTexture> m_rgba_render_texture;
-    std::shared_ptr<GLTexture> m_depth_render_texture;
+    std::vector<std::shared_ptr<GLTexture>> m_rgba_render_textures;
+    std::vector<std::shared_ptr<GLTexture>> m_depth_render_textures;
 #endif
 
     std::unique_ptr<CudaRenderBuffer> m_pip_render_buffer;
@@ -1241,8 +1252,17 @@ public:
     // Precomputed density grid.
     std::vector<float> m_precomputed_density_grid;
 
-    // Inputed full street view camera poses.
-    cl::Array<vec3> m_camera_poses;
+    // Used for block nerf demo.
+    BlockNeRFModel* m_current_block_nerf = nullptr;
+    cl::Array<BlockNeRFModel*> m_current_block_nerfs;
+    cl::Array<cl::RPoint3D> m_block_camera_poses;
+    cl::BezierCurve3D<double> m_block_camera_path;
+    double m_total_camera_path_distance;
+    double m_current_camera_path_distance;
+    bool m_play_block_nerf = false;
+    double m_playing_time = 0.0;
+    int m_block_nerf_camera_speed = 5;
+    cl::RPoint3D m_real_camera_pos;
 };
 
 NGP_NAMESPACE_END

@@ -1436,6 +1436,7 @@ __global__ void generate_training_samples_nerf(
     // The near distance prevents learning of camera-specific fudge right in
     // front of the camera.
     tminmax.x = fmaxf(tminmax.x, 0.0f);
+//    tminmax.y = fminf(tminmax.y, 0.5f);
 
     float startt = advance_n_steps(tminmax.x, cone_angle, random_val(rng));
     vec3 idir = vec3(1.0f) / ray_d_normalized;

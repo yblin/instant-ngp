@@ -121,7 +121,8 @@ void CameraPath::save(const fs::path& path) {
 void CameraPath::load(const fs::path& path, const mat4x3& first_xform) {
 	std::ifstream f{native_string(path)};
 	if (!f) {
-		throw std::runtime_error{fmt::format("Camera path {} does not exist.", path.str())};
+        throw std::runtime_error{fmt::format("Camera path {} does not exist.",
+                                             path.str())};
 	}
 
 	json j;
