@@ -1259,7 +1259,8 @@ public:
     cl::BezierCurve3D<double> m_block_camera_path;
     double m_total_camera_path_distance;
     double m_current_camera_path_distance;
-    bool m_play_block_nerf = false;
+    // 0 : stop, 1 : playing, 2 : pause.
+    int m_play_block_nerf = 0;
     double m_playing_time = 0.0;
     int m_block_nerf_camera_speed = 5;
     cl::RPoint3D m_real_camera_pos;

@@ -1436,7 +1436,6 @@ __global__ void generate_training_samples_nerf(
     // The near distance prevents learning of camera-specific fudge right in
     // front of the camera.
     tminmax.x = fmaxf(tminmax.x, 0.0f);
-//    tminmax.y = fminf(tminmax.y, 0.5f);
 
     float startt = advance_n_steps(tminmax.x, cone_angle, random_val(rng));
     vec3 idir = vec3(1.0f) / ray_d_normalized;
@@ -2364,23 +2363,25 @@ uint32_t Testbed::NerfTracer::trace(
         uint32_t n_steps_between_compaction = tcnn::clamp(target_n_queries / n_alive, (uint32_t)MIN_STEPS_INBETWEEN_COMPACTION, (uint32_t)MAX_STEPS_INBETWEEN_COMPACTION);
 
         uint32_t extra_stride = network.n_extra_dims() * sizeof(float);
-        PitchedPtr<NerfCoordinate> input_data((NerfCoordinate*)m_network_input, 1, 0, extra_stride);
+        PitchedPtr<NerfCoordinate> input_data((NerfCoordinate*)m_network_input,
+                                              1, 0, extra_stride);
         linear_kernel(generate_next_nerf_network_inputs, 0, stream,
-            n_alive,
-            render_aabb,
-            render_aabb_to_local,
-            train_aabb,
-            focal_length,
-            camera_matrix[2],
-            rays_current.payload,
-            input_data,
-            n_steps_between_compaction,
-            grid,
-            (show_accel>=0) ? show_accel : 0,
-            max_mip,
-            cone_angle_constant,
-            extra_dims_gpu
+                      n_alive,
+                      render_aabb,
+                      render_aabb_to_local,
+                      train_aabb,
+                      focal_length,
+                      camera_matrix[2],
+                      rays_current.payload,
+                      input_data,
+                      n_steps_between_compaction,
+                      grid,
+                      (show_accel >= 0) ? show_accel : 0,
+                      max_mip,
+                      cone_angle_constant,
+                      extra_dims_gpu
         );
+
         uint32_t n_elements = next_multiple(n_alive * n_steps_between_compaction, tcnn::batch_size_granularity);
         GPUMatrix<float> positions_matrix((float*)m_network_input, (sizeof(NerfCoordinate) + extra_stride) / sizeof(float), n_elements);
         GPUMatrix<network_precision_t, RM> rgbsigma_matrix((network_precision_t*)m_network_output, network.padded_output_width(), n_elements);
@@ -2393,28 +2394,28 @@ uint32_t Testbed::NerfTracer::trace(
         }
 
         linear_kernel(composite_kernel_nerf, 0, stream,
-            n_alive,
-            n_elements,
-            i,
-            train_aabb,
-            glow_y_cutoff,
-            glow_mode,
-            camera_matrix,
-            focal_length,
-            depth_scale,
-            rays_current.rgba,
-            rays_current.depth,
-            rays_current.payload,
-            input_data,
-            m_network_output,
-            network.padded_output_width(),
-            n_steps_between_compaction,
-            render_mode,
-            grid,
-            rgb_activation,
-            density_activation,
-            show_accel,
-            min_transmittance
+                      n_alive,
+                      n_elements,
+                      i,
+                      train_aabb,
+                      glow_y_cutoff,
+                      glow_mode,
+                      camera_matrix,
+                      focal_length,
+                      depth_scale,
+                      rays_current.rgba,
+                      rays_current.depth,
+                      rays_current.payload,
+                      input_data,
+                      m_network_output,
+                      network.padded_output_width(),
+                      n_steps_between_compaction,
+                      render_mode,
+                      grid,
+                      rgb_activation,
+                      density_activation,
+                      show_accel,
+                      min_transmittance
         );
 
         i += n_steps_between_compaction;
@@ -2534,14 +2535,17 @@ void Testbed::render_nerf(cudaStream_t stream,
         plane_z = -plane_z;
     }
 
-    ERenderMode render_mode = visualized_dimension > -1 ? ERenderMode::EncodingVis : m_render_mode;
+    ERenderMode render_mode =
+            visualized_dimension > -1 ? ERenderMode::EncodingVis
+                                      : m_render_mode;
 
     const float* extra_dims_gpu = get_inference_extra_dims(stream);
 
     NerfTracer tracer;
 
     // Our motion vector code can't undo grid distortions -- so don't render grid distortion if DLSS is enabled
-    auto grid_distortion = m_nerf.render_with_lens_distortion && !m_dlss ? m_distortion.inference_view() : Buffer2DView<const vec2>{};
+    auto grid_distortion = m_nerf.render_with_lens_distortion && !m_dlss ?
+                m_distortion.inference_view() : Buffer2DView<const vec2>{};
     Lens lens = m_nerf.render_with_lens_distortion ? m_nerf.render_lens : Lens{};
 
     auto resolution = render_buffer.resolution;
@@ -2568,7 +2572,9 @@ void Testbed::render_nerf(cudaStream_t stream,
         grid_distortion,
         render_buffer.frame_buffer,
         render_buffer.depth_buffer,
-        render_buffer.hidden_area_mask ? render_buffer.hidden_area_mask->const_view() : Buffer2DView<const uint8_t>{},
+        render_buffer.hidden_area_mask ?
+                    render_buffer.hidden_area_mask->const_view() :
+                    Buffer2DView<const uint8_t>{},
         density_grid_bitfield,
         m_nerf.show_accel,
         m_nerf.max_cascade,
@@ -2655,7 +2661,8 @@ void Testbed::render_nerf(cudaStream_t stream,
         for (uint32_t i = 0; i < n_hit; ++i) {
             total_n_steps += payloads_final_cpu[i].n_steps;
         }
-//        tlog::info() << "Total steps per hit= " << total_n_steps << "/" << n_hit << " = " << ((float)total_n_steps/(float)n_hit);
+        tlog::info() << "Total steps per hit= " << total_n_steps << "/" << n_hit
+                     << " = " << ((float)total_n_steps / (float)n_hit);
     }
 }
 
@@ -3130,6 +3137,26 @@ void Testbed::build_density_grid_from_point_cloud() {
                 }
             }
         }
+
+//        for (int x = 0; x < grid_size; ++x) {
+//            for (int y = 0; y < grid_size; ++y) {
+//                int z = 0;
+//                uint32_t index = tcnn::morton3D(x, y, z);
+//                m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
+//                index = tcnn::morton3D(x, z, y);
+//                m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
+//                index = tcnn::morton3D(z, x, y);
+//                m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
+
+//                z = grid_size - 1;
+//                index = tcnn::morton3D(x, y, z);
+//                m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
+//                index = tcnn::morton3D(x, z, y);
+//                m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
+//                index = tcnn::morton3D(z, x, y);
+//                m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
+//            }
+//        }
     }
 
     m_mesh.verts.resize(verts.size());

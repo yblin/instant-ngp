@@ -326,7 +326,8 @@ void Testbed::load_file(const fs::path& path) {
 		return;
 	}
 
-	if (equals_case_insensitive(path.extension(), "ingp") || equals_case_insensitive(path.extension(), "msgpack")) {
+    if (equals_case_insensitive(path.extension(), "ingp") ||
+        equals_case_insensitive(path.extension(), "msgpack")) {
 		load_snapshot(path);
 		return;
 	}
@@ -361,7 +362,7 @@ void Testbed::load_file(const fs::path& path) {
 	// If the dragged file isn't any of the above, assume that it's training data
 	try {
 		bool was_training_data_available = m_training_data_available;
-		load_training_data(path);
+        load_training_data(path);
 
 		if (!was_training_data_available) {
 			// If we previously didn't have any training data and only now dragged
@@ -1695,7 +1696,7 @@ void Testbed::imgui() {
 
         if (ImGui::TreeNode("Debug visualization")) {
 			ImGui::Checkbox("Visualize unit cube", &m_visualize_unit_cube);
-            if (m_testbed_mode == ETestbedMode::Nerf && m_nerf.visualize_cameras > 0) {
+            if (m_testbed_mode == ETestbedMode::Nerf) {
 				ImGui::SameLine();
 				ImGui::Checkbox("Visualize cameras", &m_nerf.visualize_cameras);
 				accum_reset |= ImGui::SliderInt("Show acceleration", &m_nerf.show_accel, -1, 7);
@@ -1709,7 +1710,8 @@ void Testbed::imgui() {
 				set_visualized_layer(m_visualized_layer);
 			}
 
-            if (m_testbed_mode == ETestbedMode::Nerf && m_nerf.visualize_cameras > 0) {
+            if (m_testbed_mode == ETestbedMode::Nerf &&
+                !m_nerf.training.dataset.paths.empty()) {
 				if (ImGui::Button("First")) {
 					first_training_view();
 				}
@@ -1726,7 +1728,7 @@ void Testbed::imgui() {
 					last_training_view();
 				}
 				ImGui::SameLine();
-				ImGui::Text("%s", m_nerf.training.dataset.paths.at(m_nerf.training.view).c_str());
+                ImGui::Text("%s", m_nerf.training.dataset.paths.at(m_nerf.training.view).c_str());
 
 				if (ImGui::SliderInt("Training view", &m_nerf.training.view, 0, (int)m_nerf.training.dataset.n_images-1)) {
 					set_camera_to_training_view(m_nerf.training.view);
@@ -1778,16 +1780,22 @@ void Testbed::imgui() {
                 if (!m_block_camera_poses.empty() && !m_block_nerfs.empty()) {
                     if (ImGui::Button("Play block NeRF")) {
                         m_current_camera_path_distance = 0.0;
-                        m_play_block_nerf = true;
+                        m_play_block_nerf = 1;
                         set_block_nerf(m_block_nerfs.front());
                     }
                     ImGui::SameLine();
-                    if (m_play_block_nerf && ImGui::Button("Pause")) {
-                        m_play_block_nerf = false;
+                    if (m_play_block_nerf != 2 && ImGui::Button("Pause")) {
+                        m_play_block_nerf = 2;
                     }
-                    if (!m_play_block_nerf && ImGui::Button("Go on")) {
-                        m_play_block_nerf = true;
+                    ImGui::SameLine();
+                    if (m_play_block_nerf == 2 && ImGui::Button("Go on")) {
+                        m_play_block_nerf = 1;
                     }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Stop")) {
+                        m_play_block_nerf = 0;
+                    }
+
                     ImGui::SliderInt("Camera speed", &m_block_nerf_camera_speed,
                                      1, 20);
                 }
@@ -2558,8 +2566,10 @@ void Testbed::init_opengl_shaders() {
 	static const char* shader_frag = R"(#version 140
 		in vec2 UVs;
 		out vec4 frag_color;
+        uniform bool single_nerf;
         uniform sampler2D rgba_texture, rgba_texture1;
         uniform sampler2D depth_texture, depth_texture1;
+        uniform float blend_rate;
 
 		struct FoveationWarp {
 			float al, bl, cl;
@@ -2593,13 +2603,13 @@ void Testbed::init_opengl_shaders() {
 			tex_coords = unwarp(tex_coords);
             vec4 c = texture(rgba_texture, tex_coords.xy);
             float d = texture(depth_texture, tex_coords.xy).r;
-            c = mix(c, texture(rgba_texture1, tex_coords.xy),
-                    step(length(c.rgb), 0.01));
-            d = mix(d, texture(depth_texture1, tex_coords.xy).r,
-                    step(length(c.rgb), 0.01));
+            if (!single_nerf && length(c.rgb) < 0.01) {
+                c = texture(rgba_texture1, tex_coords.xy);
+                d = texture(depth_texture1, tex_coords.xy).r;
+            }
             frag_color = c;
-			//Uncomment the following line of code to visualize debug the depth buffer for debugging.
-            // frag_color = vec4(vec3(texture(depth_texture1, tex_coords.xy).r), 1.0);
+            // Uncomment the following line of code to visualize debug the depth buffer for debugging.
+            // frag_color = vec4(vec3(d), 1.0);
             gl_FragDepth = d;
 		})";
 
@@ -2653,7 +2663,8 @@ void Testbed::blit_texture(const Foveation& foveation,
 
 	glBindVertexArray(m_blit_vao);
 	glUseProgram(m_blit_program);
-	glUniform1i(glGetUniformLocation(m_blit_program, "rgba_texture"), 0);
+    glUniform1i(glGetUniformLocation(m_blit_program, "single_nerf"), true);
+    glUniform1i(glGetUniformLocation(m_blit_program, "rgba_texture"), 0);
 	glUniform1i(glGetUniformLocation(m_blit_program, "depth_texture"), 1);
 
 	auto bind_warp = [&](const FoveationPiecewiseQuadratic& warp, const std::string& uniform_name) {
@@ -2739,6 +2750,7 @@ void Testbed::blit_textures(const Foveation& foveation,
 
     glBindVertexArray(m_blit_vao);
     glUseProgram(m_blit_program);
+    glUniform1i(glGetUniformLocation(m_blit_program, "single_nerf"), false);
     glUniform1i(glGetUniformLocation(m_blit_program, "rgba_texture"), 0);
     glUniform1i(glGetUniformLocation(m_blit_program, "depth_texture"), 1);
     glUniform1i(glGetUniformLocation(m_blit_program, "rgba_texture1"), 2);
@@ -3709,12 +3721,12 @@ bool Testbed::frame() {
     }
 #endif
 
-    if (m_play_block_nerf && m_current_block_nerf) {
+    if (m_play_block_nerf == 1 && m_current_block_nerf) {
         double dis = m_current_camera_path_distance +
                      m_block_nerf_camera_speed * m_frame_ms.val() * 0.001;
         double rate = dis / m_total_camera_path_distance;
         if (rate > 1.0) {
-            m_play_block_nerf = false;
+            m_play_block_nerf = 0;
         }
         m_fps_camera = true;
         cl::RPoint3D p = m_block_camera_path.GetCurvePoint(cl::Clamp(rate, 0.0, 1.0));
@@ -3722,7 +3734,7 @@ bool Testbed::frame() {
         BlockNeRFModel* current_block_nerf = m_current_block_nerf;
         int next = m_current_block_nerf->id + 1;
         if (next == m_block_nerfs.size()) {
-            m_play_block_nerf = false;
+            m_play_block_nerf = 0;
         } else {
             // Find the current block.
             BlockNeRFModel* next_block_nerf = &m_block_nerfs[next];
@@ -3737,17 +3749,17 @@ bool Testbed::frame() {
             this->set_block_nerf(*current_block_nerf);
             this->reset_accumulation(true);
 
-            p = p * m_current_block_nerf->data_scale +
+            cl::RPoint3D q = p * m_current_block_nerf->data_scale +
                     cl::RVector3D(m_current_block_nerf->data_offset.x,
                                   m_current_block_nerf->data_offset.y,
                                   m_current_block_nerf->data_offset.z);
-            m_camera[3] = vec3(p.y, p.z, p.x);
+            m_camera[3] = vec3(q.y, q.z, q.x);
             m_current_camera_path_distance = dis;
 
             // Find all blocks that overlap the current camera.
             int next = m_current_block_nerf->id + 1;
             if (next == m_block_nerfs.size()) {
-                m_play_block_nerf = false;
+                m_play_block_nerf = 0;
             } else {
                 BlockNeRFModel* next_block_nerf = &m_block_nerfs[next];
                 m_current_block_nerfs.clear();
@@ -3758,9 +3770,16 @@ bool Testbed::frame() {
                     m_rgba_render_textures.emplace_back(std::make_shared<GLTexture>());
                     m_depth_render_textures.emplace_back(std::make_shared<GLTexture>());
                 }
+
+//                vec3 v1 = m_current_block_nerf->nerf_aabb.center();
+//                vec3 v2 = next_block_nerf->nerf_aabb.center();
+//                cl::RPoint3D q1(v1.x, v1.y, v1.z);
+//                cl::RPoint3D q2(v2.x, v2.y, v2.z);
+//                LOG(INFO) << cl::Distance(p, q1) << " " << cl::Distance(p, q2);
+//                m_block_blend_rate;
             }
         }
-    } else if (!m_play_block_nerf) {
+    } else if (m_play_block_nerf == 0) {
         m_current_block_nerfs.resize(1);
         m_rgba_render_textures.resize(1);
         m_depth_render_textures.resize(1);
