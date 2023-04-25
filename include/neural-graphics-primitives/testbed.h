@@ -1264,6 +1264,7 @@ public:
     double m_playing_time = 0.0;
     int m_block_nerf_camera_speed = 5;
     cl::RPoint3D m_real_camera_pos;
+    float m_block_blend_rate = 0.0f;
 };
 
 NGP_NAMESPACE_END

@@ -2877,7 +2877,7 @@ void Testbed::load_nerf_post() { // moved the second half of load_nerf here
         throw std::runtime_error{fmt::format("NeRF dataset's `aabb_scale` must be a power of two, but is {}.", m_nerf.training.dataset.aabb_scale)};
     }
 
-    int max_aabb_scale = 1 << (NERF_CASCADES()-1);
+    int max_aabb_scale = 1 << (NERF_CASCADES() - 1);
     if (m_nerf.training.dataset.aabb_scale > max_aabb_scale) {
         throw std::runtime_error{fmt::format(
             "NeRF dataset must have `aabb_scale <= {}`, but is {}. "
@@ -2903,6 +2903,7 @@ void Testbed::load_nerf_post() { // moved the second half of load_nerf here
     // Perform fixed-size stepping in unit-cube scenes (like original NeRF) and exponential
     // stepping in larger scenes.
     m_nerf.cone_angle_constant = m_nerf.training.dataset.aabb_scale <= 1 ? 0.0f : (1.0f / 256.0f);
+    LOG(INFO) << m_nerf.cone_angle_constant;
 
     m_up_dir = m_nerf.training.dataset.up;
 }
@@ -3138,25 +3139,27 @@ void Testbed::build_density_grid_from_point_cloud() {
             }
         }
 
-//        for (int x = 0; x < grid_size; ++x) {
-//            for (int y = 0; y < grid_size; ++y) {
-//                int z = 0;
-//                uint32_t index = tcnn::morton3D(x, y, z);
-//                m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
-//                index = tcnn::morton3D(x, z, y);
-//                m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
-//                index = tcnn::morton3D(z, x, y);
-//                m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
+        if (i == m_nerf.max_cascade) {
+            for (int x = 0; x < grid_size; ++x) {
+                for (int y = 0; y < grid_size; ++y) {
+                    int z = 0;
+                    uint32_t index = tcnn::morton3D(x, y, z);
+                    m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
+    //                index = tcnn::morton3D(x, z, y);
+    //                m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
+                    index = tcnn::morton3D(z, x, y);
+                    m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
 
-//                z = grid_size - 1;
-//                index = tcnn::morton3D(x, y, z);
-//                m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
-//                index = tcnn::morton3D(x, z, y);
-//                m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
-//                index = tcnn::morton3D(z, x, y);
-//                m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
-//            }
-//        }
+                    z = grid_size - 1;
+                    index = tcnn::morton3D(x, y, z);
+                    m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
+                    index = tcnn::morton3D(x, z, y);
+                    m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
+                    index = tcnn::morton3D(z, x, y);
+                    m_precomputed_density_grid[i * NERF_GRID_N_CELLS() + index] = 0.0f;
+                }
+            }
+        }
     }
 
     m_mesh.verts.resize(verts.size());

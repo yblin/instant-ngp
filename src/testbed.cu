@@ -2603,9 +2603,9 @@ void Testbed::init_opengl_shaders() {
 			tex_coords = unwarp(tex_coords);
             vec4 c = texture(rgba_texture, tex_coords.xy);
             float d = texture(depth_texture, tex_coords.xy).r;
-            if (!single_nerf && length(c.rgb) < 0.01) {
-                c = texture(rgba_texture1, tex_coords.xy);
-                d = texture(depth_texture1, tex_coords.xy).r;
+            if (!single_nerf) {
+                c = mix(c, texture(rgba_texture1, tex_coords.xy), blend_rate);
+                d = mix(d, texture(depth_texture1, tex_coords.xy).r, blend_rate);
             }
             frag_color = c;
             // Uncomment the following line of code to visualize debug the depth buffer for debugging.
@@ -2755,6 +2755,7 @@ void Testbed::blit_textures(const Foveation& foveation,
     glUniform1i(glGetUniformLocation(m_blit_program, "depth_texture"), 1);
     glUniform1i(glGetUniformLocation(m_blit_program, "rgba_texture1"), 2);
     glUniform1i(glGetUniformLocation(m_blit_program, "depth_texture1"), 3);
+    glUniform1i(glGetUniformLocation(m_blit_program, "blend_rate"), m_block_blend_rate);
 
     auto bind_warp = [&](const FoveationPiecewiseQuadratic& warp, const std::string& uniform_name) {
         glUniform1f(glGetUniformLocation(m_blit_program, (uniform_name + ".al").c_str()), warp.al);
@@ -3761,22 +3762,29 @@ bool Testbed::frame() {
             if (next == m_block_nerfs.size()) {
                 m_play_block_nerf = 0;
             } else {
-                BlockNeRFModel* next_block_nerf = &m_block_nerfs[next];
+//                BlockNeRFModel* next_block_nerf = &m_block_nerfs[next];
                 m_current_block_nerfs.clear();
                 m_current_block_nerfs.push_back(m_current_block_nerf);
-                m_current_block_nerfs.push_back(next_block_nerf);
+//                m_current_block_nerfs.push_back(next_block_nerf);
 
-                while (m_rgba_render_textures.size() < m_current_block_nerfs.size()) {
-                    m_rgba_render_textures.emplace_back(std::make_shared<GLTexture>());
-                    m_depth_render_textures.emplace_back(std::make_shared<GLTexture>());
-                }
+//                while (m_rgba_render_textures.size() < m_current_block_nerfs.size()) {
+//                    m_rgba_render_textures.emplace_back(std::make_shared<GLTexture>());
+//                    m_depth_render_textures.emplace_back(std::make_shared<GLTexture>());
+//                }
 
 //                vec3 v1 = m_current_block_nerf->nerf_aabb.center();
 //                vec3 v2 = next_block_nerf->nerf_aabb.center();
 //                cl::RPoint3D q1(v1.x, v1.y, v1.z);
 //                cl::RPoint3D q2(v2.x, v2.y, v2.z);
-//                LOG(INFO) << cl::Distance(p, q1) << " " << cl::Distance(p, q2);
-//                m_block_blend_rate;
+//                double dis1 = cl::Distance(q1, q2);
+//                double dis2 = cl::Distance(p, q1);
+//                double dis3 = cl::Distance(p, q2);
+//                if (dis3 > dis1)
+//                    m_block_blend_rate = 0.0f;
+//                else if (dis2 > dis1)
+//                    m_block_blend_rate = 1.0f;
+//                else
+//                    m_block_blend_rate = dis2 / dis1;
             }
         }
     } else if (m_play_block_nerf == 0) {

@@ -833,7 +833,7 @@ NerfDataset load_block_nerf_data(const fs::path& path,
     if (!f.is_open()) {
         f.open(native_string(path / "blocks" / "setting.json"));
     }
-    CHECK(f.is_open());
+    CHECK(f.is_open()) << "No setting.json";
 
     nlohmann::json setting = nlohmann::json::parse(f, nullptr, true, true);
     if (setting.contains("scale")) {

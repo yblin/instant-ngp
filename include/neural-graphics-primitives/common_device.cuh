@@ -890,7 +890,7 @@ inline NGP_HOST_DEVICE vec4 read_rgba(ivec2 px, const ivec2& resolution, const v
 		case EImageDataType::Byte: {
 			uint8_t val[4];
 			*(uint32_t*)&val[0] = ((uint32_t*)pixels)[pixel_idx(px, resolution, img)];
-			if (*(uint32_t*)&val[0] == 0x00FF00FF) {
+            if (*(uint32_t*)&val[0] == 0x00FF00FF) {
 				return vec4(-1.0f);
 			}
 
