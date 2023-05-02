@@ -113,7 +113,10 @@ public:
 
 	virtual ~NerfNetwork() { }
 
-	void inference_mixed_precision_impl(cudaStream_t stream, const tcnn::GPUMatrixDynamic<float>& input, tcnn::GPUMatrixDynamic<T>& output, bool use_inference_params = true) override {
+    void inference_mixed_precision_impl(cudaStream_t stream,
+                                        const tcnn::GPUMatrixDynamic<float>& input,
+                                        tcnn::GPUMatrixDynamic<T>& output,
+                                        bool use_inference_params = true) override {
 		uint32_t batch_size = input.n();
 		tcnn::GPUMatrixDynamic<T> density_network_input{m_pos_encoding->padded_output_width(), batch_size, stream, m_pos_encoding->preferred_output_layout()};
 		tcnn::GPUMatrixDynamic<T> rgb_network_input{m_rgb_network_input_width, batch_size, stream, m_dir_encoding->preferred_output_layout()};
@@ -153,7 +156,11 @@ public:
 		return m_density_network->padded_output_width();
 	}
 
-	std::unique_ptr<tcnn::Context> forward_impl(cudaStream_t stream, const tcnn::GPUMatrixDynamic<float>& input, tcnn::GPUMatrixDynamic<T>* output = nullptr, bool use_inference_params = false, bool prepare_input_gradients = false) override {
+    std::unique_ptr<tcnn::Context> forward_impl(cudaStream_t stream,
+                                                const tcnn::GPUMatrixDynamic<float>& input,
+                                                tcnn::GPUMatrixDynamic<T>* output = nullptr,
+                                                bool use_inference_params = false,
+                                                bool prepare_input_gradients = false) override {
 		// Make sure our temporary buffers have the correct size for the given batch size
 		uint32_t batch_size = input.n();
 
@@ -447,7 +454,9 @@ public:
 		return m_density_network->num_forward_activations() + m_rgb_network->num_forward_activations() + 2;
 	}
 
-	std::pair<const T*, tcnn::MatrixLayout> forward_activations(const tcnn::Context& ctx, uint32_t layer) const override {
+    std::pair<const T*, tcnn::MatrixLayout>
+    forward_activations(const tcnn::Context& ctx,
+                        uint32_t layer) const override {
 		const auto& forward = dynamic_cast<const ForwardContext&>(ctx);
 		if (layer == 0) {
 			return {forward.density_network_input.data(), m_pos_encoding->preferred_output_layout()};
@@ -455,8 +464,9 @@ public:
 			return m_density_network->forward_activations(*forward.density_network_ctx, layer - 1);
 		} else if (layer == m_density_network->num_forward_activations() + 1) {
 			return {forward.rgb_network_input.data(), m_dir_encoding->preferred_output_layout()};
-		} else {
-			return m_rgb_network->forward_activations(*forward.rgb_network_ctx, layer - 2 - m_density_network->num_forward_activations());
+        } else {
+            return m_rgb_network->forward_activations(*forward.rgb_network_ctx,
+                                                      layer - 2 - m_density_network->num_forward_activations());
 		}
 	}
 
@@ -478,7 +488,8 @@ public:
 
 	tcnn::json hyperparams() const override {
 		json density_network_hyperparams = m_density_network->hyperparams();
-		density_network_hyperparams["n_output_dims"] = m_density_network->padded_output_width();
+        density_network_hyperparams["n_output_dims"] =
+                m_density_network->padded_output_width();
 		return {
 			{"otype", "NerfNetwork"},
 			{"pos_encoding", m_pos_encoding->hyperparams()},
@@ -497,7 +508,9 @@ private:
 	uint32_t m_rgb_network_input_width;
 	uint32_t m_n_pos_dims;
 	uint32_t m_n_dir_dims;
-	uint32_t m_n_extra_dims; // extra dimensions are assumed to be part of a compound encoding with dir_dims
+    // Extra dimensions are assumed to be part of a compound encoding with
+    // dir_dims.
+    uint32_t m_n_extra_dims;
 	uint32_t m_dir_offset;
 
 	// // Storage of forward pass data

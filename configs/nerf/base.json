@@ -22,7 +22,7 @@
 	},
 	"encoding": {
 		"otype": "HashGrid",
-		"n_levels": 8,
+		"n_levels": 9,
 		"n_features_per_level": 4,
 		"log2_hashmap_size": 19,
 		"base_resolution": 16
@@ -37,14 +37,19 @@
 	"dir_encoding": {
 		"otype": "Composite",
 		"nested": [
-			{
-				"n_dims_to_encode": 3,
-				"otype": "SphericalHarmonics",
-				"degree": 4
-			},
-			{
-				"otype": "Identity"
-			}
+//			{
+//				"n_dims_to_encode": 3,
+//				"otype": "SphericalHarmonics",
+//				"degree": 4
+//			},
+//			{
+//			    "n_dims_to_encode": 1,
+//			    "otype": "Frequency",
+//			    "n_frequencies": 32
+//			},
+            {
+                "otype": "Identity"
+            }
 		]
 	},
 	"rgb_network": {

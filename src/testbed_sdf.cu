@@ -338,8 +338,9 @@ __global__ void shade_kernel_sdf(
 			float skyam = -dot(normal, up_dir) * 0.5f + 0.5f;
 			vec3 suncol = vec3{255.f/255.0f, 225.f/255.0f, 195.f/255.0f} * 4.f * distances[i]; // Distance encodes shadow occlusion. 0=occluded, 1=no shadow
 			const vec3 skycol = vec3{195.f/255.0f, 215.f/255.0f, 255.f/255.0f} * 4.f * skyam;
-			float check_size = 8.f/aabb.diag().x;
-			float check=((int(floorf(check_size*(pos.x-aabb.min.x)))^int(floorf(check_size*(pos.z-aabb.min.z)))) &1) ? 0.8f : 0.2f;
+            float check_size = 8.f / aabb.diag().x;
+            float check=((int(floorf(check_size*(pos.x-aabb.min.x))) ^
+                          int(floorf(check_size*(pos.z-aabb.min.z)))) & 1) ? 0.8f : 0.2f;
 			const vec3 floorcol = vec3{check*check*check, check*check, check};
 			color = evaluate_shading(
 				floor ? floorcol : brdf.basecolor * brdf.basecolor,
@@ -1284,41 +1285,6 @@ __global__ void generate_grid_samples_sdf_uniform(ivec3 res_3d, BoundingBox aabb
 	pos = pos * (aabb.max - aabb.min) + aabb.min;
 	out[i] = transpose(render_aabb_to_local) * pos;
 }
-
-GPUMemory<float> Testbed::get_sdf_gt_on_grid(ivec3 res3d, const BoundingBox& aabb, const mat3& render_aabb_to_local) {
-	const uint32_t n_elements = (res3d.x*res3d.y*res3d.z);
-	GPUMemory<float> density(n_elements);
-	GPUMemoryArena::Allocation alloc;
-	auto scratch = allocate_workspace_and_distribute<
-		vec3
-	>(m_stream.get(), &alloc, n_elements);
-	vec3* positions = std::get<0>(scratch);
-	float* sdf_out = density.data();
-	const dim3 threads = { 16, 8, 1 };
-	const dim3 blocks = { div_round_up((uint32_t)res3d.x, threads.x), div_round_up((uint32_t)res3d.y, threads.y), div_round_up((uint32_t)res3d.z, threads.z) };
-	generate_grid_samples_sdf_uniform<<<blocks, threads, 0, m_stream.get()>>>(res3d, aabb, render_aabb_to_local, positions);
-	CUDA_CHECK_THROW(cudaStreamSynchronize(m_stream.get()));
-	m_sdf.triangle_bvh->signed_distance_gpu(
-			n_elements,
-			m_sdf.mesh_sdf_mode,
-			positions,
-			sdf_out,
-			m_sdf.triangles_gpu.data(),
-			false,
-			m_stream.get()
-		);
-	CUDA_CHECK_THROW(cudaStreamSynchronize(m_stream.get()));
-	/*
-	std::vector<float> cpudensity(density.size());
-	std::vector<vec3> cpupositions(n_elements);
-	density.copy_to_host(cpudensity);
-	cudaMemcpy(cpupositions.data(),positions,n_elements*12,cudaMemcpyDeviceToHost);
-	for (int i=0;i<64;++i)
-		printf("[%0.3f %0.3f %0.3f] -> %0.3f\n", cpupositions[i].x,cpupositions[i].y,cpupositions[i].z,cpudensity[i]);
-	*/
-	return density;
-}
-
 
 void Testbed::train_sdf(size_t target_batch_size, bool get_loss_scalar, cudaStream_t stream) {
 	const uint32_t n_output_dims = 1;

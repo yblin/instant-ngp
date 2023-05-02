@@ -448,35 +448,6 @@ PYBIND11_MODULE(pyngp, m) {
 		.def("load_camera_path", &Testbed::load_camera_path, py::arg("path"), "Load a camera path")
 		.def("load_file", &Testbed::load_file, py::arg("path"), "Load a file and automatically determine how to handle it. Can be a snapshot, dataset, network config, or camera path.")
 		.def_property("loop_animation", &Testbed::loop_animation, &Testbed::set_loop_animation)
-		.def("compute_and_save_png_slices", &Testbed::compute_and_save_png_slices,
-			py::arg("filename"),
-			py::arg("resolution") = ivec3(256),
-			py::arg("aabb") = BoundingBox{},
-			py::arg("thresh") = std::numeric_limits<float>::max(),
-			py::arg("density_range") = 4.f,
-			py::arg("flip_y_and_z_axes") = false,
-			"Compute & save a PNG file representing the 3D density or distance field from the current SDF or NeRF model. "
-		)
-		.def("compute_and_save_marching_cubes_mesh", &Testbed::compute_and_save_marching_cubes_mesh,
-			py::arg("filename"),
-			py::arg("resolution") = ivec3(256),
-			py::arg("aabb") = BoundingBox{},
-			py::arg("thresh") = std::numeric_limits<float>::max(),
-			py::arg("generate_uvs_for_obj_file") = false,
-			"Compute & save a marching cubes mesh from the current SDF or NeRF model. "
-			"Supports OBJ and PLY format. Note that UVs are only supported by OBJ files. "
-			"`thresh` is the density threshold; use 0 for SDF; 2.5 works well for NeRF. "
-			"If the aabb parameter specifies an inside-out (\"empty\") box (default), the current render_aabb bounding box is used."
-		)
-		.def("compute_marching_cubes_mesh", &Testbed::compute_marching_cubes_mesh,
-			py::arg("resolution") = ivec3(256),
-			py::arg("aabb") = BoundingBox{},
-			py::arg("thresh") = std::numeric_limits<float>::max(),
-			"Compute a marching cubes mesh from the current SDF or NeRF model. "
-			"Returns a python dict with numpy arrays V (vertices), N (vertex normals), C (vertex colors), and F (triangular faces). "
-			"`thresh` is the density threshold; use 0 for SDF; 2.5 works well for NeRF. "
-			"If the aabb parameter specifies an inside-out (\"empty\") box (default), the current render_aabb bounding box is used."
-		)
 		// Interesting members.
 		.def_readwrite("dynamic_res", &Testbed::m_dynamic_res)
 		.def_readwrite("dynamic_res_target_fps", &Testbed::m_dynamic_res_target_fps)

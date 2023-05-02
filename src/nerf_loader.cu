@@ -845,10 +845,11 @@ NerfDataset load_block_nerf_data(const fs::path& path,
     if (setting.contains("aabb_scale")) {
         result.aabb_scale = setting["aabb_scale"];
     } else {
-        result.aabb_scale = 1;
-        while (result.scale > result.aabb_scale) {
-            result.aabb_scale <<= 1;
-        }
+        result.aabb_scale = 4;
+    }
+
+    if (setting.contains("n_extra_learnable_dims")) {
+        result.n_extra_learnable_dims = setting["n_extra_learnable_dims"];
     }
 
     if (setting.contains("training_steps")) {

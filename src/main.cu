@@ -169,7 +169,7 @@ int main_func(const std::vector<std::string>& arguments) {
 #endif
 
 	if (gui) {
-        testbed.init_window(width_flag ? get(width_flag) : 1920,
+        testbed.init_window(width_flag  ? get(width_flag)  : 1920,
                             height_flag ? get(height_flag) : 1080);
     }
 
