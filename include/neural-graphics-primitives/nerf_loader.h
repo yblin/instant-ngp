@@ -116,7 +116,8 @@ struct NerfDataset {
 		return result;
 	}
 
-	mat4x3 nerf_matrix_to_ngp(const mat4x3& nerf_matrix, bool scale_columns = false) const {
+    mat4x3 nerf_matrix_to_ngp(const mat4x3& nerf_matrix,
+                              bool scale_columns = false) const {
 		mat4x3 result = nerf_matrix;
         result[0] *= scale_columns ? scale : 1.f;
         result[1] *= scale_columns ? -scale : -1.f;
