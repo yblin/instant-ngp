@@ -78,15 +78,16 @@ struct NerfPosition {
 };
 
 struct NerfDirection {
-    NGP_HOST_DEVICE NerfDirection(const vec3& dir, float dt) : d{dir} {}
-    vec3 d;
+    NGP_HOST_DEVICE NerfDirection(const vec4& dir, float dt) : d{dir} {}
+    vec4 d;
 };
 
 struct NerfCoordinate {
-    NGP_HOST_DEVICE NerfCoordinate(const vec3& pos, const vec3& dir, float dt)
+    NGP_HOST_DEVICE NerfCoordinate(const vec3& pos, const vec4& dir, float dt)
         : pos{pos, dt}, dt{dt}, dir{dir, dt} {}
+
     NGP_HOST_DEVICE void set_with_optional_extra_dims(const vec3& pos,
-                                                      const vec3& dir,
+                                                      const vec4& dir,
                                                       float dt,
                                                       const float* extra_dims,
                                                       uint32_t stride_in_bytes) {
