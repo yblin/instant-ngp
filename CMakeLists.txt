@@ -236,8 +236,8 @@ list(APPEND NGP_SOURCES
 	src/camera_path.cu
 	src/common.cu
 	src/common_device.cu
-	src/marching_cubes.cu
-	src/nerf_loader.cu
+        src/marching_cubes.cu
+        src/nerf_loader.cu
 	src/render_buffer.cu
 	src/testbed.cu
 	src/testbed_image.cu
