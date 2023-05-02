@@ -83,25 +83,41 @@ struct NerfDirection {
 };
 
 struct NerfCoordinate {
-    NGP_HOST_DEVICE NerfCoordinate(const vec3& pos, const vec3& dir, float dt) : pos{pos, dt}, dt{dt}, dir{dir, dt} {}
-    NGP_HOST_DEVICE void set_with_optional_extra_dims(const vec3& pos, const vec3& dir, float dt, const float* extra_dims, uint32_t stride_in_bytes) {
+    NGP_HOST_DEVICE NerfCoordinate(const vec3& pos, const vec3& dir, float dt)
+        : pos{pos, dt}, dt{dt}, dir{dir, dt} {}
+    NGP_HOST_DEVICE void set_with_optional_extra_dims(const vec3& pos,
+                                                      const vec3& dir,
+                                                      float dt,
+                                                      const float* extra_dims,
+                                                      uint32_t stride_in_bytes) {
         this->dt = dt;
         this->pos = NerfPosition(pos, dt);
         this->dir = NerfDirection(dir, dt);
         copy_extra_dims(extra_dims, stride_in_bytes);
     }
-    inline NGP_HOST_DEVICE const float* get_extra_dims() const { return (const float*)(this + 1); }
-    inline NGP_HOST_DEVICE float* get_extra_dims() { return (float*)(this + 1); }
 
-    NGP_HOST_DEVICE void copy(const NerfCoordinate& inp, uint32_t stride_in_bytes) {
+    inline NGP_HOST_DEVICE const float* get_extra_dims() const {
+        return (const float*)(this + 1);
+    }
+
+    inline NGP_HOST_DEVICE float* get_extra_dims() {
+        return (float*)(this + 1);
+    }
+
+    NGP_HOST_DEVICE void copy(const NerfCoordinate& inp,
+                              uint32_t stride_in_bytes) {
         *this = inp;
         copy_extra_dims(inp.get_extra_dims(), stride_in_bytes);
     }
-    NGP_HOST_DEVICE inline void copy_extra_dims(const float *extra_dims, uint32_t stride_in_bytes) {
+
+    NGP_HOST_DEVICE inline void copy_extra_dims(const float *extra_dims,
+                                                uint32_t stride_in_bytes) {
         if (stride_in_bytes >= sizeof(NerfCoordinate)) {
             float* dst = get_extra_dims();
-            const uint32_t n_extra = (stride_in_bytes - sizeof(NerfCoordinate)) / sizeof(float);
-            for (uint32_t i = 0; i < n_extra; ++i) dst[i] = extra_dims[i];
+            const uint32_t n_extra = (stride_in_bytes -
+                                      sizeof(NerfCoordinate)) / sizeof(float);
+            for (uint32_t i = 0; i < n_extra; ++i)
+                dst[i] = extra_dims[i];
         }
     }
 
