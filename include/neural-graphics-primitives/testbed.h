@@ -425,7 +425,6 @@ public:
     void generate_training_samples_sdf(vec3* positions, float* distances, uint32_t n_to_generate, cudaStream_t stream, bool uniform_only);
     void update_density_grid_nerf(float decay, uint32_t n_uniform_density_grid_samples, uint32_t n_nonuniform_density_grid_samples, cudaStream_t stream);
     void update_density_grid_mean_and_bitfield(cudaStream_t stream);
-    void mark_density_grid_in_sphere_empty(const vec3& pos, float radius, cudaStream_t stream);
 
     struct NerfCounters {
         // Number of steps each ray took.
@@ -458,12 +457,6 @@ public:
     void train(uint32_t batch_size);
     vec2 calc_focal_length(const ivec2& resolution, const vec2& relative_focal_length, int fov_axis, float zoom) const;
     vec2 render_screen_center(const vec2& screen_center) const;
-    void optimise_mesh_step(uint32_t N_STEPS);
-    void compute_mesh_vertex_colors();
-    tcnn::GPUMemory<float> get_density_on_grid(ivec3 res3d, const BoundingBox& aabb, const mat3& render_aabb_to_local); // network version (nerf or sdf)
-    tcnn::GPUMemory<float> get_sdf_gt_on_grid(ivec3 res3d, const BoundingBox& aabb, const mat3& render_aabb_to_local); // sdf gt version (sdf only)
-    tcnn::GPUMemory<vec4> get_rgba_on_grid(ivec3 res3d, vec3 ray_dir, bool voxel_centers, float depth, bool density_as_alpha = false);
-    int marching_cubes(ivec3 res3d, const BoundingBox& render_aabb, const mat3& render_aabb_to_local, float thresh);
     float get_depth_from_renderbuffer(const CudaRenderBuffer& render_buffer, const vec2& uv);
     vec3 get_3d_pos_from_pixel(const CudaRenderBuffer& render_buffer, const ivec2& focus_pixel);
     void autofocus();
@@ -514,8 +507,6 @@ public:
     bool loop_animation();
     void set_loop_animation(bool value);
     float compute_image_mse(bool quantize_to_byte);
-    void compute_and_save_marching_cubes_mesh(const char* filename, ivec3 res3d = ivec3(128), BoundingBox aabb = {}, float thresh = 2.5f, bool unwrap_it = false);
-    ivec3 compute_and_save_png_slices(const char* filename, int res, BoundingBox aabb = {}, float thresh = 2.5f, float density_range = 4.f, bool flip_y_and_z_axes = false);
 
     fs::path root_dir();
 
