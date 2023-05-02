@@ -284,8 +284,12 @@ public:
 	using grad_t = float;
 #endif
 
-	TakikawaEncoding(uint32_t starting_level, std::shared_ptr<TriangleOctree> octree, tcnn::InterpolationType interpolation_type)
-		: m_starting_level{starting_level}, m_octree{octree}, m_interpolation_type{interpolation_type} {
+    TakikawaEncoding(uint32_t starting_level,
+                     std::shared_ptr<TriangleOctree> octree,
+                     tcnn::InterpolationType interpolation_type)
+        : m_starting_level{starting_level},
+          m_octree{octree},
+          m_interpolation_type{interpolation_type} {
 
 		if (m_starting_level >= m_octree->depth()) {
 			throw std::runtime_error{"Starting level must be below octree depth."};
