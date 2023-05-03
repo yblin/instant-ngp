@@ -79,6 +79,7 @@ struct NerfPosition {
 
 struct NerfDirection {
     NGP_HOST_DEVICE NerfDirection(const vec4& dir, float dt) : d{dir} {}
+
     vec4 d;
 };
 

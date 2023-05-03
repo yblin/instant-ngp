@@ -1877,7 +1877,9 @@ void Testbed::imgui() {
         ImGui::SameLine();
         if (ImGui::Button("Save")) {
             try {
-                save_snapshot(m_imgui.snapshot_path, m_include_optimizer_state_in_snapshot, m_compress_snapshot);
+                save_snapshot(m_imgui.snapshot_path,
+                              m_include_optimizer_state_in_snapshot,
+                              m_compress_snapshot);
             } catch (std::exception& e) {
                 imgui_error_string = fmt::format("Failed to save snapshot: {}", e.what());
                 ImGui::OpenPopup("Error");
