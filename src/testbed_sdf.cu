@@ -181,7 +181,7 @@ __global__ void advance_pos_kernel_sdf(
 
 	// Skip over regions not covered by the octree
 	if (octree_nodes && !TriangleOctree::contains(octree_nodes, max_octree_depth, pos)) {
-		float octree_distance = (TriangleOctree::ray_intersect(octree_nodes, max_octree_depth, pos, payload.dir) + 1e-6f);
+        float octree_distance = (TriangleOctree::ray_intersect(octree_nodes, max_octree_depth, pos, payload.dir).x + 1e-6f);
 		distance += octree_distance;
 		pos += octree_distance * payload.dir;
 	}
@@ -256,7 +256,7 @@ __global__ void prepare_shadow_rays(const uint32_t n_elements,
 	view_pos += t * dir;
 
 	if (octree_nodes && !TriangleOctree::contains(octree_nodes, max_octree_depth, view_pos)) {
-		t = fmaxf(0.0f, TriangleOctree::ray_intersect(octree_nodes, max_octree_depth, view_pos, dir) + 1e-6f);
+        t = fmaxf(0.0f, TriangleOctree::ray_intersect(octree_nodes, max_octree_depth, view_pos, dir).x + 1e-6f);
 		view_pos += t * dir;
 	}
 
@@ -589,7 +589,7 @@ __global__ void init_rays_with_payload_kernel_sdf(
 	ray.advance(t + 1e-6f);
 
 	if (octree_nodes && !TriangleOctree::contains(octree_nodes, max_octree_depth, ray.o)) {
-		t = max(0.0f, TriangleOctree::ray_intersect(octree_nodes, max_octree_depth, ray.o, ray.d));
+        t = max(0.0f, TriangleOctree::ray_intersect(octree_nodes, max_octree_depth, ray.o, ray.d).x);
 		if (ray.o.y > floor_y && ray.d.y < 0.f) {
 			float floor_dist = -(ray.o.y - floor_y) / ray.d.y;
 			if (floor_dist > 0.f) {

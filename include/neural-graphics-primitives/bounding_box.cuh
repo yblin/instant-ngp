@@ -176,7 +176,8 @@ struct BoundingBox {
 		}
 
 		if (tmin > tymax || tymin > tmax) {
-			return { std::numeric_limits<float>::max(), std::numeric_limits<float>::max() };
+            return { std::numeric_limits<float>::max(),
+                     std::numeric_limits<float>::max() };
 		}
 
 		if (tymin > tmin) {
@@ -195,7 +196,8 @@ struct BoundingBox {
 		}
 
 		if (tmin > tzmax || tzmin > tmax) {
-			return { std::numeric_limits<float>::max(), std::numeric_limits<float>::max() };
+            return { std::numeric_limits<float>::max(),
+                     std::numeric_limits<float>::max() };
 		}
 
 		if (tzmin > tmin) {

@@ -173,6 +173,8 @@ public:
             uint32_t max_mip,
             float cone_angle_constant,
             ERenderMode render_mode,
+            const TriangleOctree* octree,
+            const uint32_t n_octree_levels,
             cudaStream_t stream
         );
 
@@ -197,6 +199,8 @@ public:
             float glow_y_cutoff,
             int glow_mode,
             const float* extra_dims_gpu,
+            const TriangleOctree* octree,
+            const uint32_t n_octree_levels,
             cudaStream_t stream
         );
 
@@ -545,6 +549,12 @@ public:
 
     // Point cloud for acceleration.
     cl::Array<cl::FPoint3D> m_point_cloud;
+
+    // BVH for triangle mesh.
+    std::shared_ptr<TriangleBvh> m_triangle_bvh;
+    std::vector<Triangle> m_triangles_cpu;
+    tcnn::GPUMemory<Triangle> m_triangles_gpu;
+    std::shared_ptr<TriangleOctree> m_triangle_octree;
 
     bool m_render_window = false;
     bool m_gather_histograms = false;

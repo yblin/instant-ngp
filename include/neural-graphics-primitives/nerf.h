@@ -32,7 +32,7 @@ inline constexpr __host__ __device__ uint32_t NERF_GRID_N_CELLS() {
 struct NerfPayload {
     vec3 origin;
     vec3 dir;
-    float t;
+    vec2 t;
     float max_weight;
     uint32_t idx;
     uint16_t n_steps;
@@ -64,9 +64,8 @@ struct RaysNerfSoa {
 //#define TRIPLANAR_COMPATIBLE_POSITIONS   // if this is defined, then positions are stored as [x,y,z,x] so that it can be split as [x,y] [y,z] [z,x] by the input encoding
 
 struct NerfPosition {
-    NGP_HOST_DEVICE NerfPosition(const vec3& pos, float dt)
-    :
-    p{pos}
+    NGP_HOST_DEVICE NerfPosition(const vec3& pos)
+        : p{pos}
 #ifdef TRIPLANAR_COMPATIBLE_POSITIONS
     , x{pos.x}
 #endif
@@ -78,23 +77,23 @@ struct NerfPosition {
 };
 
 struct NerfDirection {
-    NGP_HOST_DEVICE NerfDirection(const vec4& dir, float dt) : d{dir} {}
+    NGP_HOST_DEVICE NerfDirection(const vec3& dir) : d{dir} {}
 
-    vec4 d;
+    vec3 d;
 };
 
 struct NerfCoordinate {
-    NGP_HOST_DEVICE NerfCoordinate(const vec3& pos, const vec4& dir, float dt)
-        : pos{pos, dt}, dt{dt}, dir{dir, dt} {}
+    NGP_HOST_DEVICE NerfCoordinate(const vec3& pos, const vec3& dir, float dt)
+        : pos{pos/*, dt*/}, dt{dt}, dir{dir/*, dt*/} {}
 
     NGP_HOST_DEVICE void set_with_optional_extra_dims(const vec3& pos,
-                                                      const vec4& dir,
+                                                      const vec3& dir,
                                                       float dt,
                                                       const float* extra_dims,
                                                       uint32_t stride_in_bytes) {
         this->dt = dt;
-        this->pos = NerfPosition(pos, dt);
-        this->dir = NerfDirection(dir, dt);
+        this->pos = NerfPosition(pos);
+        this->dir = NerfDirection(dir);
         copy_extra_dims(extra_dims, stride_in_bytes);
     }
 

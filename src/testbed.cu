@@ -682,7 +682,7 @@ void Testbed::reset_nerf_network(BlockNeRFModel& model) {
     const json& dir_encoding_config = config["dir_encoding"];
     const json& rgb_network_config = config["rgb_network"];
 
-    uint32_t n_dir_dims = 4;
+    uint32_t n_dir_dims = 3;
     uint32_t n_extra_dims = m_nerf.training.dataset.n_extra_dims();
 
     // Construct a nerf network.
@@ -4022,7 +4022,7 @@ void Testbed::reset_network(bool clear_density_grid) {
         json& dir_encoding_config = config["dir_encoding"];
         json& rgb_network_config = config["rgb_network"];
 
-        uint32_t n_dir_dims = 4;
+        uint32_t n_dir_dims = 3;
         uint32_t n_extra_dims = m_nerf.training.dataset.n_extra_dims();
 
         // Instantiate an additional model for each auxiliary GPU.

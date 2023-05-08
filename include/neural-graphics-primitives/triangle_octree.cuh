@@ -282,13 +282,14 @@ public:
 		return true;
 	}
 
-	__device__ static float ray_intersect(const TriangleOctreeNode* nodes, int max_depth, const vec3& ro, const vec3& rd) {
+    __device__ static vec2 ray_intersect(const TriangleOctreeNode* nodes, int max_depth, const vec3& ro, const vec3& rd) {
 		FixedStack<int, 64> query_stack;
 		query_stack.push(0);
 
 		static constexpr float MAX_DIST = 1000.f;
 
 		float mint = MAX_DIST;
+        vec2 res = {MAX_DIST, MAX_DIST};
 
 		// Ensure that closer children are checked last such that they rise to the top of the stack
 		uint8_t reorder_mask = 0;
@@ -323,9 +324,10 @@ public:
 				if (t.y >= 0 && t.y < MAX_DIST && t.x < mint) {
 					// All children's children are gonna be leaves,
 					// so we can cut to the chase and terminate here already.
-					if (depth == max_depth-1) {
+                    if (depth == max_depth - 1) {
 						if (t.x >= 0) {
 							mint = t.x;
+                            res = t;
 						}
 					} else {
 						query_stack.push(child_idx);
@@ -334,7 +336,7 @@ public:
 			}
 		}
 
-		return mint;
+        return res;
 	}
 
 	const TriangleOctreeNode* nodes_gpu() const {
