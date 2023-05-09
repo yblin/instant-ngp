@@ -1498,114 +1498,39 @@ __global__ void generate_training_samples_nerf(
     float startt = advance_n_steps(tminmax.x, cone_angle, random_val(rng));
     vec3 idir = vec3(1.0f) / ray_d_normalized;
 
-    // First pass to compute an accurate number of steps.
-    uint32_t j = 0;
-    Ray ray;
-    ray.o = ray_unnormalized.o + startt * ray_d_normalized;
-    ray.d = ray_d_normalized;
-    vec2 span = TriangleOctree::ray_intersect(octree_nodes,
-                                              max_octree_depth - 1,
-                                              ray.o,
-                                              ray.d);
-    vec3 pos = ray.o + span.x * ray.d;
-
-    while (aabb.contains(pos) && j < NERF_STEPS()) {
-        ++j;
-
-        // Compute step size.
-        float t = (pos - ray_unnormalized.o).length();
-        float dt = calc_dt(t, cone_angle);
-
-        float next_t = span.x + dt;
-        if (next_t <= span.y) {
-            pos += dt * ray.d;
-            span.x = next_t;
-        } else {
-            ray.o += next_t * ray.d;
-            span = TriangleOctree::ray_intersect(octree_nodes,
-                                                 max_octree_depth - 1,
-                                                 ray.o,
-                                                 ray.d);
-            pos = ray.o + span.x * ray.d;
-        }
-    }
-//    printf("%d\n", j);
-
-    if (j == 0 && !train_envmap) {
-        return;
-    }
-    uint32_t numsteps = j;
-
-    // Note that in CUDA the return value of 'atomicAdd' is the previously
-    // stored value.
-    uint32_t base = atomicAdd(numsteps_counter, numsteps);
-    if (base + numsteps > max_samples) {
-        return;
-    }
-
-    coords_out += base;
-
-    uint32_t ray_idx = atomicAdd(ray_counter, 1);
-
-    ray_indices_out[ray_idx] = i;
-    rays_out_unnormalized[ray_idx] = ray_unnormalized;
-    numsteps_out[ray_idx * 2 + 0] = numsteps;
-    numsteps_out[ray_idx * 2 + 1] = base;
-
-    j = 0;
-    ray.o = ray_unnormalized.o + startt * ray_d_normalized;
-    ray.d = ray_d_normalized;
-    span = TriangleOctree::ray_intersect(octree_nodes,
-                                         max_octree_depth - 2,
-                                         ray.o,
-                                         ray.d);
-    pos = ray.o + span.x * ray.d;
-    while (aabb.contains(pos) && j < numsteps) {
-        // Compute step size.
-        float t = (pos - ray_unnormalized.o).length();
-        float dt = calc_dt(t, cone_angle);
-
-        coords_out(j)->set_with_optional_extra_dims(
-                    warp_position(pos, aabb),
-                    warp_direction(ray_d_normalized),
-                    warp_dt(dt),
-                    extra_dims,
-                    coords_out.stride_in_bytes);
-        ++j;
-
-        float next_t = span.x + dt;
-        if (next_t <= span.y) {
-            pos += dt * ray.d;
-            span.x = next_t;
-        } else {
-            ray.o += next_t * ray.d;
-            span = TriangleOctree::ray_intersect(octree_nodes,
-                                                 max_octree_depth - 2,
-                                                 ray.o,
-                                                 ray.d);
-            pos = ray.o + span.x * ray.d;
-        }
-    }
-
-    // First pass to compute an accurate number of steps.
+//    // First pass to compute an accurate number of steps.
 //    uint32_t j = 0;
-//    float t = startt;
-//    vec3 pos;
+//    Ray ray;
+//    ray.o = ray_unnormalized.o + startt * ray_d_normalized;
+//    ray.d = ray_d_normalized;
+//    vec2 span = TriangleOctree::ray_intersect(octree_nodes,
+//                                              max_octree_depth - 2,
+//                                              ray.o,
+//                                              ray.d);
+//    vec3 pos = ray.o + span.x * ray.d;
 
-//    while (aabb.contains(pos = ray_unnormalized.o + t * ray_d_normalized) &&
-//           j < NERF_STEPS()) {
+//    while (aabb.contains(pos) && j < NERF_STEPS()) {
+//        ++j;
+
 //        // Compute step size.
+//        float t = (pos - ray_unnormalized.o).length();
 //        float dt = calc_dt(t, cone_angle);
 
-//        uint32_t mip = mip_from_dt(dt, pos, max_mip);
-//        if (density_grid_occupied_at(pos, density_grid, mip)) {
-//            ++j;
-//            t += dt;
+//        float next_t = span.x + dt;
+//        if (next_t <= span.y) {
+//            pos += dt * ray.d;
+//            span.x = next_t;
 //        } else {
-//            t = advance_to_next_voxel(t, cone_angle, pos, ray_d_normalized,
-//                                      idir, mip);
+//            ray.o += next_t * ray.d;
+//            span = TriangleOctree::ray_intersect(octree_nodes,
+//                                                 max_octree_depth - 2,
+//                                                 ray.o,
+//                                                 ray.d);
+//            pos = ray.o + span.x * ray.d;
 //        }
 //    }
+////    printf("%d\n", j);
+
 //    if (j == 0 && !train_envmap) {
 //        return;
 //    }
@@ -1627,27 +1552,102 @@ __global__ void generate_training_samples_nerf(
 //    numsteps_out[ray_idx * 2 + 0] = numsteps;
 //    numsteps_out[ray_idx * 2 + 1] = base;
 
-//    t = startt;
 //    j = 0;
-
-//    while (aabb.contains(pos = ray_unnormalized.o + t * ray_d_normalized) &&
-//           j < numsteps) {
+//    ray.o = ray_unnormalized.o + startt * ray_d_normalized;
+//    ray.d = ray_d_normalized;
+//    span = TriangleOctree::ray_intersect(octree_nodes,
+//                                         max_octree_depth - 2,
+//                                         ray.o,
+//                                         ray.d);
+//    pos = ray.o + span.x * ray.d;
+//    while (aabb.contains(pos) && j < numsteps) {
+//        // Compute step size.
+//        float t = (pos - ray_unnormalized.o).length();
 //        float dt = calc_dt(t, cone_angle);
-//        uint32_t mip = mip_from_dt(dt, pos, max_mip);
-//        if (density_grid_occupied_at(pos, density_grid, mip)) {
-//            coords_out(j)->set_with_optional_extra_dims(
-//                        warp_position(pos, aabb),
-//                        warp_direction(ray_d_normalized),
-//                        warp_dt(dt),
-//                        extra_dims,
-//                        coords_out.stride_in_bytes);
-//            ++j;
-//            t += dt;
+
+//        coords_out(j)->set_with_optional_extra_dims(
+//                    warp_position(pos, aabb),
+//                    warp_direction(ray_d_normalized),
+//                    warp_dt(dt),
+//                    extra_dims,
+//                    coords_out.stride_in_bytes);
+//        ++j;
+
+//        float next_t = span.x + dt;
+//        if (next_t <= span.y) {
+//            pos += dt * ray.d;
+//            span.x = next_t;
 //        } else {
-//            t = advance_to_next_voxel(t, cone_angle, pos, ray_d_normalized,
-//                                      idir, mip);
+//            ray.o += next_t * ray.d;
+//            span = TriangleOctree::ray_intersect(octree_nodes,
+//                                                 max_octree_depth - 2,
+//                                                 ray.o,
+//                                                 ray.d);
+//            pos = ray.o + span.x * ray.d;
 //        }
 //    }
+
+    // First pass to compute an accurate number of steps.
+    uint32_t j = 0;
+    float t = startt;
+    vec3 pos;
+
+    while (aabb.contains(pos = ray_unnormalized.o + t * ray_d_normalized) &&
+           j < NERF_STEPS()) {
+        // Compute step size.
+        float dt = calc_dt(t, cone_angle);
+
+        uint32_t mip = mip_from_dt(dt, pos, max_mip);
+        if (density_grid_occupied_at(pos, density_grid, mip)) {
+            ++j;
+            t += dt;
+        } else {
+            t = advance_to_next_voxel(t, cone_angle, pos, ray_d_normalized,
+                                      idir, mip);
+        }
+    }
+    if (j == 0 && !train_envmap) {
+        return;
+    }
+    uint32_t numsteps = j;
+
+    // Note that in CUDA the return value of 'atomicAdd' is the previously
+    // stored value.
+    uint32_t base = atomicAdd(numsteps_counter, numsteps);
+    if (base + numsteps > max_samples) {
+        return;
+    }
+
+    coords_out += base;
+
+    uint32_t ray_idx = atomicAdd(ray_counter, 1);
+
+    ray_indices_out[ray_idx] = i;
+    rays_out_unnormalized[ray_idx] = ray_unnormalized;
+    numsteps_out[ray_idx * 2 + 0] = numsteps;
+    numsteps_out[ray_idx * 2 + 1] = base;
+
+    t = startt;
+    j = 0;
+
+    while (aabb.contains(pos = ray_unnormalized.o + t * ray_d_normalized) &&
+           j < numsteps) {
+        float dt = calc_dt(t, cone_angle);
+        uint32_t mip = mip_from_dt(dt, pos, max_mip);
+        if (density_grid_occupied_at(pos, density_grid, mip)) {
+            coords_out(j)->set_with_optional_extra_dims(
+                        warp_position(pos, aabb),
+                        warp_direction(ray_d_normalized),
+                        warp_dt(dt),
+                        extra_dims,
+                        coords_out.stride_in_bytes);
+            ++j;
+            t += dt;
+        } else {
+            t = advance_to_next_voxel(t, cone_angle, pos, ray_d_normalized,
+                                      idir, mip);
+        }
+    }
 
     if (max_level_rand_training) {
         max_level_ptr += base;
@@ -1778,7 +1778,8 @@ __global__ void compute_loss_kernel_train_nerf(
     if (train_with_random_bg_color) {
         background_color = random_val_3d(rng);
     }
-    vec3 pre_envmap_background_color = background_color = srgb_to_linear(background_color);
+    vec3 pre_envmap_background_color = background_color =
+            srgb_to_linear(background_color);
 
     // Composit background behind envmap
     vec4 envmap_value;
@@ -1786,17 +1787,20 @@ __global__ void compute_loss_kernel_train_nerf(
     if (envmap) {
         dir = normalize(rays_in_unnormalized[i].d);
         envmap_value = read_envmap(envmap, dir);
-        background_color = envmap_value.rgb + background_color * (1.0f - envmap_value.a);
+        background_color = envmap_value.rgb +
+                background_color * (1.0f - envmap_value.a);
     }
 
     vec3 exposure_scale = exp(0.6931471805599453f * exposure[img]);
     // vec3 rgbtarget = composit_and_lerp(uv, resolution, img, training_images, background_color, exposure_scale);
     // vec3 rgbtarget = composit(uv, resolution, img, training_images, background_color, exposure_scale);
-    vec4 texsamp = read_rgba(uv, resolution, metadata[img].pixels, metadata[img].image_data_type);
+    vec4 texsamp = read_rgba(uv, resolution, metadata[img].pixels,
+                             metadata[img].image_data_type);
 
     vec3 rgbtarget;
     if (train_in_linear_colors || color_space == EColorSpace::Linear) {
-        rgbtarget = exposure_scale * texsamp.rgb + (1.0f - texsamp.a) * background_color;
+        rgbtarget = exposure_scale * texsamp.rgb +
+                    (1.0f - texsamp.a) * background_color;
 
         if (!train_in_linear_colors) {
             rgbtarget = linear_to_srgb(rgbtarget);
@@ -1863,19 +1867,25 @@ __global__ void compute_loss_kernel_train_nerf(
     }
 
     if (error_map) {
-        const vec2 pos = clamp(uv * vec2(error_map_res) - vec2(0.5f), vec2(0.0f), vec2(error_map_res) - vec2(1.0f + 1e-4f));
+        const vec2 pos = clamp(uv * vec2(error_map_res) - vec2(0.5f), vec2(0.0f),
+                               vec2(error_map_res) - vec2(1.0f + 1e-4f));
         const ivec2 pos_int = pos;
         const vec2 weight = pos - vec2(pos_int);
 
         ivec2 idx = clamp(pos_int, ivec2(0), resolution - ivec2(2));
 
         auto deposit_val = [&](int x, int y, float val) {
-            atomicAdd(&error_map[img * compMul(error_map_res) + y * error_map_res.x + x], val);
+            atomicAdd(&error_map[img * compMul(error_map_res) +
+                      y * error_map_res.x + x], val);
         };
 
         if (sharpness_data && aabb.contains(hitpoint)) {
-            ivec2 sharpness_pos = clamp(ivec2(uv * vec2(sharpness_resolution)), ivec2(0), sharpness_resolution - ivec2(1));
-            float sharp = sharpness_data[img * compMul(sharpness_resolution) + sharpness_pos.y * sharpness_resolution.x + sharpness_pos.x] + 1e-6f;
+            ivec2 sharpness_pos = clamp(ivec2(uv * vec2(sharpness_resolution)),
+                                        ivec2(0),
+                                        sharpness_resolution - ivec2(1));
+            float sharp = sharpness_data[img * compMul(sharpness_resolution) +
+                    sharpness_pos.y * sharpness_resolution.x +
+                    sharpness_pos.x] + 1e-6f;
 
             // The maximum value of positive floats interpreted in uint format is the same as the maximum value of the floats.
             float grid_sharp = __uint_as_float(atomicMax((uint32_t*)&cascaded_grid_at(hitpoint, sharpness_grid, mip_from_pos(hitpoint, max_mip)), __float_as_uint(sharp)));
@@ -1892,8 +1902,10 @@ __global__ void compute_loss_kernel_train_nerf(
 
     loss_scale /= n_rays;
 
-    const float output_l2_reg = rgb_activation == ENerfActivation::Exponential ? 1e-4f : 0.0f;
-    const float output_l1_reg_density = *mean_density_ptr < NERF_MIN_OPTICAL_THICKNESS() ? 1e-4f : 0.0f;
+    const float output_l2_reg =
+            rgb_activation == ENerfActivation::Exponential ? 1e-4f : 0.0f;
+    const float output_l1_reg_density =
+            *mean_density_ptr < NERF_MIN_OPTICAL_THICKNESS() ? 1e-4f : 0.0f;
 
     // Now do it again computing gradients.
     vec3 rgb_ray2 = { 0.0f, 0.0f, 0.0f };
@@ -1912,7 +1924,8 @@ __global__ void compute_loss_kernel_train_nerf(
         float depth = distance(pos, ray_o);
 
         float dt = unwarp_dt(coord_in->dt);
-        const tcnn::vector_t<tcnn::network_precision_t, 4> local_network_output = *(tcnn::vector_t<tcnn::network_precision_t, 4>*)network_output;
+        const tcnn::vector_t<tcnn::network_precision_t, 4>
+                local_network_output = *(tcnn::vector_t<tcnn::network_precision_t, 4>*)network_output;
         const vec3 rgb = network_to_rgb_vec(local_network_output, rgb_activation);
         const float density = network_to_density(float(local_network_output[3]), density_activation);
         const float alpha = 1.f - __expf(-density * dt);

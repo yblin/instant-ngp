@@ -166,8 +166,17 @@ public:
 
 		auto forward = std::make_unique<ForwardContext>();
 
-		forward->density_network_input = tcnn::GPUMatrixDynamic<T>{m_pos_encoding->padded_output_width(), batch_size, stream, m_pos_encoding->preferred_output_layout()};
-		forward->rgb_network_input = tcnn::GPUMatrixDynamic<T>{m_rgb_network_input_width, batch_size, stream, m_dir_encoding->preferred_output_layout()};
+        forward->density_network_input = tcnn::GPUMatrixDynamic<T>{
+                m_pos_encoding->padded_output_width(),
+                batch_size,
+                stream, m_pos_encoding->preferred_output_layout()
+        };
+        forward->rgb_network_input = tcnn::GPUMatrixDynamic<T>{
+                m_rgb_network_input_width,
+                batch_size,
+                stream,
+                m_dir_encoding->preferred_output_layout()
+        };
 
 		forward->pos_encoding_ctx = m_pos_encoding->forward(
 			stream,
@@ -177,8 +186,14 @@ public:
 			prepare_input_gradients
 		);
 
-		forward->density_network_output = forward->rgb_network_input.slice_rows(0, m_density_network->padded_output_width());
-		forward->density_network_ctx = m_density_network->forward(stream, forward->density_network_input, &forward->density_network_output, use_inference_params, prepare_input_gradients);
+        forward->density_network_output =
+                forward->rgb_network_input.slice_rows(0, m_density_network->padded_output_width());
+        forward->density_network_ctx =
+                m_density_network->forward(stream,
+                                           forward->density_network_input,
+                                           &forward->density_network_output,
+                                           use_inference_params,
+                                           prepare_input_gradients);
 
 		auto dir_out = forward->rgb_network_input.slice_rows(m_density_network->padded_output_width(), m_dir_encoding->padded_output_width());
 		forward->dir_encoding_ctx = m_dir_encoding->forward(
@@ -190,15 +205,29 @@ public:
 		);
 
 		if (output) {
-			forward->rgb_network_output = tcnn::GPUMatrixDynamic<T>{output->data(), m_rgb_network->padded_output_width(), batch_size, output->layout()};
+            forward->rgb_network_output = tcnn::GPUMatrixDynamic<T>{
+                    output->data(),
+                    m_rgb_network->padded_output_width(),
+                    batch_size,
+                    output->layout()
+            };
 		}
 
-		forward->rgb_network_ctx = m_rgb_network->forward(stream, forward->rgb_network_input, output ? &forward->rgb_network_output : nullptr, use_inference_params, prepare_input_gradients);
+        forward->rgb_network_ctx =
+                m_rgb_network->forward(stream,
+                                       forward->rgb_network_input,
+                                       output ? &forward->rgb_network_output : nullptr,
+                                       use_inference_params,
+                                       prepare_input_gradients);
 
 		if (output) {
-			tcnn::linear_kernel(extract_density<T>, 0, stream,
-				batch_size, m_dir_encoding->preferred_output_layout() == tcnn::AoS ? forward->density_network_output.stride() : 1, padded_output_width(), forward->density_network_output.data(), output->data()+3
-			);
+            tcnn::linear_kernel(extract_density<T>, 0, stream,
+                                batch_size,
+                                m_dir_encoding->preferred_output_layout() == tcnn::AoS ?
+                                    forward->density_network_output.stride() : 1,
+                                padded_output_width(),
+                                forward->density_network_output.data(),
+                                output->data() + 3);
 		}
 
 		return forward;
