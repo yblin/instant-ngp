@@ -1,5 +1,5 @@
 //
-// Copyright 2014 Yangbin Lin. All Rights Reserved.
+// Copyright 2014-2023 Yangbin Lin. All Rights Reserved.
 //
 // Author: yblin@jmu.edu.cn (Yangbin Lin)
 //
@@ -16,7 +16,7 @@ namespace cl {
 namespace test {
 
 TEST(OctreeTest, Insert) {
-    Octree<int> octree(2, 2, 2);
+    Octree<int> octree(2);
 
     octree(0, 0, 0) = 1;
     octree(0, 0, 1) = 2;
@@ -36,7 +36,7 @@ TEST(OctreeTest, Insert) {
     ASSERT_EQ(octree(1, 1, 0), 7);
     ASSERT_EQ(octree(1, 1, 1), 8);
 
-    Octree<bool> octree1(1, 1, 1);
+    Octree<bool> octree1(2);
     octree1(0, 0, 0) = true;
     ASSERT(octree1(0, 0, 0));
 }

@@ -1,5 +1,5 @@
 ﻿//
-// Copyright 2014-2022 Yangbin Lin. All Rights Reserved.
+// Copyright 2014-2023 Yangbin Lin. All Rights Reserved.
 //
 // Author: yblin@jmu.edu.cn (Yangbin Lin)
 //
@@ -21,6 +21,12 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+// The width of the screen (the maximum characters in one line).
+// MESSAGE_MAX_CHARACTERS_PER_LINE <= 0 means that the screen width is infinity.
+#ifndef MESSAGE_MAX_CHARACTERS_PER_LINE
+#define MESSAGE_MAX_CHARACTERS_PER_LINE 120
+#endif
 
 namespace cl {
 
@@ -67,15 +73,15 @@ std::basic_ostream<Char, CharTraits>& operator<<(
  * Message class stream information for various objects.
  * 
  * Why need Message?
- *  1. STL formating library do not support pointers.
+ *  1. STL formating library do not support pointers and array.
  *  2. It is easier to use.
- *  3. It supports aligned formating.
+ *  3. It supports aligned formating for matrices or tensors.
  *
  * Sample usage;
  *
  *   bool flag = true;
  *   Message foo;
- *   foo << "flag" << " = " << flag;
+ *   foo << "flag", " = ", flag;
  *   std::cout << foo;
  *
  * The above code will print "flag = true".
@@ -103,7 +109,6 @@ public:
         precision_ = message.precision_;
         stream_ << std::setprecision(message.precision_);
         max_elements_ = message.max_elements_;
-        screen_width_ = message.screen_width_;
     }
 
     /**
@@ -172,7 +177,6 @@ public:
         precision_ = message.precision_;
         stream_ << std::setprecision(message.precision_);
         max_elements_ = message.max_elements_;
-        screen_width_ = message.screen_width_;
         return *this;
     }
 
@@ -332,8 +336,10 @@ public:
         }
 
         // Check if the sequence can be shown in one line.
-        size_t screen_w = screen_width_;
-        if (screen_w == 0) screen_w = std::numeric_limits<size_t>::max();
+        size_t screen_w = MESSAGE_MAX_CHARACTERS_PER_LINE > 0 ?
+                    MESSAGE_MAX_CHARACTERS_PER_LINE :
+                    std::numeric_limits<size_t>::max();
+
         size_t length = 0;
         for (const std::string& term : terms)
             length += term.size() + 2;
@@ -346,7 +352,7 @@ public:
 
         // Otherwise, we split terms into multi lines.
         std::vector<std::string> lines;
-        Split(terms, width, &lines);
+        Split(terms, width, screen_w, &lines);
         Join(lines, "\n");
 
         return *this;
@@ -438,13 +444,6 @@ public:
     }
 
     /**
-     * Return the current screen width setting.
-     */
-    int screen_width() const {
-        return screen_width_;
-    }
-
-    /**
      * Return the current precision setting.
      */
     int precision() const {
@@ -461,17 +460,6 @@ public:
         assert(max_elements >= 0);
 
         max_elements_ = max_elements;
-    }
-
-    /**
-     * Set the width of the screen (the maximum characters in one line).
-     * screen_width = 0 means that the screen width is infinity. The default
-     * value is 120.
-     */
-    void set_screen_width(int screen_width) {
-        assert(screen_width > 1);
-
-        screen_width_ = screen_width;
     }
 
     /**
@@ -528,7 +516,15 @@ private:
         int n = shape[depth];
         if (depth + 1 == shape.size()) {
             // Info of 1D sequence.
-            screen_width_ -= static_cast<int>(depth + depth);
+            size_t screen_width = MESSAGE_MAX_CHARACTERS_PER_LINE > 0 ?
+                        MESSAGE_MAX_CHARACTERS_PER_LINE :
+                        std::numeric_limits<size_t>::max();
+            if (screen_width < depth + depth + 10) {
+                screen_width = 10;
+            } else {
+                screen_width -= depth + depth;
+            }
+
             std::vector<std::string> terms;
             Iterator p = first;
             std::advance(p, n);
@@ -536,11 +532,10 @@ private:
 
             std::string space(depth, ' ');
             std::vector<std::string> lines;
-            Split(terms, width, &lines);
+            Split(terms, width, screen_width, &lines);
             for (size_t i = 1; i < lines.size(); ++i) {
                 lines[i] = space + lines[i];
             }
-            screen_width_ += static_cast<int>(depth + depth);
             Join(lines, "\n");
             return *this;
         }
@@ -613,7 +608,6 @@ private:
         Message msg;
         msg.set_precision(precision_);
         msg.set_max_elements(max_elements_);
-        msg.set_screen_width(screen_width_);
         msg.Append(t);
         return msg.ToString();
     }
@@ -716,15 +710,13 @@ private:
      */
     void Split(const std::vector<std::string>& terms,
                size_t width,
+               size_t screen_width,
                std::vector<std::string>* lines) const {
         lines->clear();
         if (terms.empty()) {
             lines->push_back("[]");
             return;
         }
-
-        size_t screen_w = screen_width_ - 1;
-        if (screen_w == 0) screen_w = std::numeric_limits<size_t>::max();
 
         std::string str = "[";
         size_t leading = 1;
@@ -743,7 +735,7 @@ private:
                 term = left_space + term + right_space;
             }
 
-            if (leading + term.size() + 2 <= screen_w) {
+            if (leading + term.size() + 2 < screen_width) {
                 str += term;
                 leading += term.size();
             } else {
@@ -828,10 +820,6 @@ private:
     // the message.
     // max_elements = 0 means that all elements will be recorded.
     int max_elements_ = 10;
-
-    // The width of the screen (the maximum characters in one line).
-    // screen_width = 0 means that the screen width is infinity.
-    int screen_width_ = 120;
 
     // Precision for double and float.
     // By default, we want there to be enough precision when printing a double

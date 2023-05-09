@@ -72,10 +72,7 @@ void MinEnclosingRectangle2D(const Array<Point2D<T>>& points,
         }
 
         // Now we can determine a rectangle.
-        T angle = Radian(polygon[cur].x,
-                         polygon[cur].y,
-                         polygon.next_vertex(cur).x,
-                         polygon.next_vertex(cur).y);
+        T angle = RobustRadian(polygon[cur], polygon.next_vertex(cur));
         Array<Point> ps(4);
         ps[0] = Rotate(polygon[cur],      T(2 * M_PI) - angle);
         ps[1] = Rotate(polygon[farthest], T(2 * M_PI) - angle);

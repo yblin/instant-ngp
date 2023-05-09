@@ -93,7 +93,7 @@ IntType Power2Ceil(IntType n) {
 }
 
 /**
- * Return the number of bits of 'n'.
+ * Return the number of bits in integer n (excluding leading zeros)
  *
  * Equal to n_bits - __builtin_clz(n)
  */

@@ -118,11 +118,27 @@ public:
                                         tcnn::GPUMatrixDynamic<T>& output,
                                         bool use_inference_params = true) override {
 		uint32_t batch_size = input.n();
-		tcnn::GPUMatrixDynamic<T> density_network_input{m_pos_encoding->padded_output_width(), batch_size, stream, m_pos_encoding->preferred_output_layout()};
-		tcnn::GPUMatrixDynamic<T> rgb_network_input{m_rgb_network_input_width, batch_size, stream, m_dir_encoding->preferred_output_layout()};
+        tcnn::GPUMatrixDynamic<T> density_network_input {
+            m_pos_encoding->padded_output_width(),
+            batch_size,
+            stream,
+            m_pos_encoding->preferred_output_layout()
+        };
+        tcnn::GPUMatrixDynamic<T> rgb_network_input{
+            m_rgb_network_input_width,
+            batch_size,
+            stream,
+            m_dir_encoding->preferred_output_layout()
+        };
 
-		tcnn::GPUMatrixDynamic<T> density_network_output = rgb_network_input.slice_rows(0, m_density_network->padded_output_width());
-		tcnn::GPUMatrixDynamic<T> rgb_network_output{output.data(), m_rgb_network->padded_output_width(), batch_size, output.layout()};
+        tcnn::GPUMatrixDynamic<T> density_network_output =
+                rgb_network_input.slice_rows(0, m_density_network->padded_output_width());
+        tcnn::GPUMatrixDynamic<T> rgb_network_output {
+            output.data(),
+            m_rgb_network->padded_output_width(),
+            batch_size,
+            output.layout()
+        };
 
 		m_pos_encoding->inference_mixed_precision(
 			stream,
@@ -131,9 +147,13 @@ public:
 			use_inference_params
 		);
 
-		m_density_network->inference_mixed_precision(stream, density_network_input, density_network_output, use_inference_params);
+        m_density_network->inference_mixed_precision(stream,
+                                                     density_network_input,
+                                                     density_network_output,
+                                                     use_inference_params);
 
-		auto dir_out = rgb_network_input.slice_rows(m_density_network->padded_output_width(), m_dir_encoding->padded_output_width());
+        auto dir_out = rgb_network_input.slice_rows(m_density_network->padded_output_width(),
+                                                    m_dir_encoding->padded_output_width());
 		m_dir_encoding->inference_mixed_precision(
 			stream,
 			input.slice_rows(m_dir_offset, m_dir_encoding->input_width()),

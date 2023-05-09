@@ -3880,17 +3880,17 @@ void Testbed::train_nerf_step(uint32_t target_batch_size,
 
     GPUMemoryArena::Allocation alloc;
     auto scratch = allocate_workspace_and_distribute<
-        uint32_t, // ray_indices
-        Ray,      // rays
-        uint32_t, // numsteps
-        float,    // coords
-        float,    // max_level
-        network_precision_t, // mlp_out
-        network_precision_t, // dloss_dmlp_out
-        float,   // coords_compacted
-        float,   // coords_gradient
-        float,   // max_level_compacted
-        uint32_t // ray_counter
+            uint32_t, // ray_indices
+            Ray,      // rays
+            uint32_t, // numsteps
+            float,    // coords
+            float,    // max_level
+            network_precision_t, // mlp_out
+            network_precision_t, // dloss_dmlp_out
+            float,   // coords_compacted
+            float,   // coords_gradient
+            float,   // max_level_compacted
+            uint32_t // ray_counter
     >(
         stream,
         &alloc,

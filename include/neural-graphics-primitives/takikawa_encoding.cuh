@@ -147,8 +147,8 @@ __global__ void kernel_takikawa(
 	);
 
 	if (data_out) {
-		// Set output to zero for levels that were not reached
-		level = max(0, level-(int)starting_level);
+        // Set output to zero for levels that were not reached.
+        level = max(0, level - (int)starting_level);
 		for (; level < n_levels; ++level) {
 			NGP_PRAGMA_UNROLL
 			for (uint32_t f = 0; f < N_FEATURES_PER_LEVEL; ++f) {
@@ -160,12 +160,11 @@ __global__ void kernel_takikawa(
 
 template <typename T>
 __global__ void kernel_takikawa_backward_input(
-	const uint32_t num_elements,
-	const uint32_t num_grid_features,
-	const tcnn::MatrixView<const T> dL_dy,
-	const float* __restrict__ dy_dx,
-	tcnn::MatrixView<float> dL_dx
-) {
+        const uint32_t num_elements,
+        const uint32_t num_grid_features,
+        const tcnn::MatrixView<const T> dL_dy,
+        const float* __restrict__ dy_dx,
+        tcnn::MatrixView<float> dL_dx) {
 	const uint32_t input_index = threadIdx.x + blockIdx.x * blockDim.x;
 	if (input_index >= num_elements) return;
 
@@ -176,7 +175,8 @@ __global__ void kernel_takikawa_backward_input(
 
 	float result = 0;
 	for (int k = 0; k < num_grid_features; ++k) {
-		result += (float)dL_dy(k, i) * dy_dx[i * fan_out_grad + j * num_grid_features + k];
+        result += (float)dL_dy(k, i) *
+                         dy_dx[i * fan_out_grad + j * num_grid_features + k];
 	}
 	dL_dx(j, i) = result;
 }
@@ -197,19 +197,16 @@ __global__ void kernel_takikawa_backward(
 	const uint32_t encoded_index = i * N_FEATURES_PER_LEVEL * n_levels;
 	if (encoded_index >= num_elements * N_FEATURES_PER_LEVEL * n_levels) return;
 
-	TriangleOctree::traverse(
-		octree_nodes,
-		octree_dual_nodes,
-		n_levels + starting_level,
-		{
-			data_in(0, i),
-			data_in(1, i),
-			data_in(2, i),
-		},
-		[&](const TriangleOctreeDualNode& node, uint32_t level, vec3 pos) {
-			if (level < starting_level) {
-				return;
-			}
+    TriangleOctree::traverse(
+        octree_nodes,
+        octree_dual_nodes,
+        n_levels + starting_level,
+        { data_in(0, i), data_in(1, i), data_in(2, i) },
+        [&](const TriangleOctreeDualNode& node, uint32_t level, vec3 pos) {
+            if (level < starting_level) {
+                return;
+            }
+
 			level -= starting_level;
 
 			if (interpolation_type == tcnn::InterpolationType::Smoothstep) {
@@ -226,8 +223,7 @@ __global__ void kernel_takikawa_backward(
 				grad[f] = dL_dy(N_FEATURES_PER_LEVEL * level + f, i);
 			}
 
-			// Tri-linear interpolation
-
+            // Tri-linear interpolation.
 			NGP_PRAGMA_UNROLL
 			for (uint32_t idx = 0; idx < 8; ++idx) {
 				float weight = 1;
@@ -259,7 +255,8 @@ __global__ void kernel_takikawa_backward(
 					} else {
 						NGP_PRAGMA_UNROLL
 						for (uint32_t f = 0; f < N_FEATURES_PER_LEVEL; ++f) {
-							atomicAdd((float*)&params_gradient[param_idx], (float)grad[f] * weight);
+                            atomicAdd((float*)&params_gradient[param_idx],
+                                      (float)grad[f] * weight);
 						}
 					}
 				}
@@ -371,20 +368,20 @@ public:
 				CUDA_CHECK_THROW(cudaMemsetAsync(params_gradient, 0, n_params() * sizeof(grad_t), stream));
 			}
 
-			tcnn::linear_kernel(kernel_takikawa_backward<T, grad_t, N_FEATURES_PER_LEVEL>, 0, stream,
-				num_elements,
-				n_levels(),
-				m_starting_level,
-				m_interpolation_type,
-				m_octree->nodes_gpu(),
-				m_octree->dual_nodes_gpu(),
-				params_gradient,
-				input.view(),
-				dL_doutput.view()
-			);
+            tcnn::linear_kernel(kernel_takikawa_backward<T, grad_t, N_FEATURES_PER_LEVEL>, 0, stream,
+                                num_elements,
+                                n_levels(),
+                                m_starting_level,
+                                m_interpolation_type,
+                                m_octree->nodes_gpu(),
+                                m_octree->dual_nodes_gpu(),
+                                params_gradient,
+                                input.view(),
+                                dL_doutput.view());
 
 			if (!std::is_same<grad_t, T>::value) {
-				parallel_for_gpu(stream, n_params(), [grad=this->gradients(), grad_tmp=params_gradient] __device__ (size_t i) {
+                parallel_for_gpu(stream, n_params(), [grad=this->gradients(),
+                                 grad_tmp=params_gradient] __device__ (size_t i) {
 					grad[i] = (T)grad_tmp[i];
 				});
 			}
@@ -392,13 +389,12 @@ public:
 
 		// Gradient computation w.r.t. input
 		if (dL_dinput) {
-			tcnn::linear_kernel(kernel_takikawa_backward_input<T>, 0, stream,
-				num_elements * input_width(),
-				N_FEATURES_PER_LEVEL * n_levels(),
-				dL_doutput.view(),
-				forward.dy_dx.data(),
-				dL_dinput->view()
-			);
+            tcnn::linear_kernel(kernel_takikawa_backward_input<T>, 0, stream,
+                                num_elements * input_width(),
+                                N_FEATURES_PER_LEVEL * n_levels(),
+                                dL_doutput.view(),
+                                forward.dy_dx.data(),
+                                dL_dinput->view());
 		}
 	}
 

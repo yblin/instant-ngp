@@ -20,7 +20,7 @@ namespace cl {
 namespace world {
 
 /**
- * Used to render textures on the screen for debug.
+ * Used to render textures on the screen.
  */
 class TextureRenderer {
     TextureRenderer() {

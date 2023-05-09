@@ -33,10 +33,20 @@ public:
     Renderer(Window* window, gl::Camera* camera)
         : BasicRenderer(window, camera) {
         glGenQueries(1, &time_elapsed_query_);
+        screen_quad_.SetRenderData(Quad());
     }
 
     virtual ~Renderer() {
         glDeleteQueries(1, &time_elapsed_query_);
+    }
+
+    /**
+     * Add a post shader as the last step.
+     */
+    void AddPostShader(gl::Shader* shader) {
+        CHECK(shader);
+
+        post_shaders_.push_back(shader);
     }
 
     /**
@@ -59,6 +69,7 @@ public:
 
         LightPass(scene);
         OutlinePass(scene);
+        PostPass();
 
         // Restore the renderer's viewport, so that texture renderer will
         // render the target to the right place.
@@ -73,6 +84,24 @@ public:
         glGetQueryObjectui64v(time_elapsed_query_, GL_QUERY_RESULT,
                               &elapsed_time);
         rendering_time_ = elapsed_time * 1e-9;
+    }
+
+    /**
+     * Save the result to the image.
+     *
+     * Slow, used for debug.
+     */
+    void Save(Image* image) const {
+        CHECK(image);
+
+        int w = out_framebuffer_.width(), h = out_framebuffer_.height();
+
+        image->Reset(h, w, 4);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        out_framebuffer_.Bind();
+        glReadBuffer(GL_COLOR_ATTACHMENT0);
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, image->data());
+        out_framebuffer_.Unbind();
     }
 
     /**
@@ -158,6 +187,28 @@ private:
         inter_framebuffers_[1].TransferColorBuffer(0, &out_framebuffer_);
     }
 
+    /**
+     * Do post pass by the given shader.
+     */
+    void PostPass() {
+        if (post_shaders_.empty()) return;
+
+        // For checked nodes, we render outlines for them.
+        ResetInterFramebuffers(1);
+
+        out_texture_.Bind(0);
+        for (gl::Shader* shader : post_shaders_) {
+            shader->Use();
+            shader->SetUniform("image", 0);
+
+            inter_framebuffers_[0].Bind();
+            glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+            screen_quad_.Render();
+            inter_framebuffers_[0].Unbind();
+            inter_framebuffers_[0].TransferColorBuffer(0, &out_framebuffer_);
+        }
+    }
+
     // Show or hide outlines for the checked nodes.
     bool show_outlines_ = false;
 
@@ -167,12 +218,18 @@ private:
     // Rendering time.
     double rendering_time_ = 0.0;
 
+    // Help to render to the framebuffer.
+    RenderObject screen_quad_;
+
     // Intermediate texture for other passes.
     gl::Texture inter_textures_[N_INTER_FRAMEBUFFERS];
 
     // Except the ms_framebuffer and out_framebuffer, we also need more
     // intermediate framebuffer for other passes.
     gl::Framebuffer inter_framebuffers_[N_INTER_FRAMEBUFFERS];
+
+    // Post shaders for post process.
+    Array<gl::Shader*> post_shaders_;
 };
 
 } // namespace world

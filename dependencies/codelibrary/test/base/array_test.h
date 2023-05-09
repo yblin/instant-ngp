@@ -50,7 +50,7 @@ TEST(ArrayTest, PushBackPerformance) {
         timer2.Stop();
 
         printf("%9d %11s %11s\n", n[i], timer1.average_time(tests[i]).c_str(),
-               timer2.average_time(tests[i]).c_str();
+               timer2.average_time(tests[i]).c_str());
     }
     printf("\n");
 }

@@ -99,7 +99,8 @@ public:
 		return brick_pos;
 	}
 
-	void build(const TriangleBvh& bvh, const std::vector<Triangle>& triangles, uint32_t max_depth) {
+    void build(const TriangleBvh& bvh, const std::vector<Triangle>& triangles,
+               uint32_t max_depth) {
 		m_nodes.clear();
 		m_dual_nodes.clear();
 
@@ -137,7 +138,8 @@ public:
 					if (i&2) ++child_pos.y;
 					if (i&4) ++child_pos.z;
 
-					BoundingBox bb = {size * vec3(child_pos), size * vec3(child_pos + u16vec3(1))};
+                    BoundingBox bb = {size * vec3(child_pos),
+                                      size * vec3(child_pos + u16vec3(1))};
 
 					if (!bvh.touches_triangle(bb, triangles.data())) {
 						m_nodes[parent_idx].children[i] = -1;
@@ -149,7 +151,9 @@ public:
 
 					// Create regular nodes one layer less deep as the dual nodes
 					if (depth < max_depth-2) {
-						m_nodes[node_idx].pos = {(uint16_t)child_pos.x, (uint16_t)child_pos.y, (uint16_t)child_pos.z};
+                        m_nodes[node_idx].pos = {(uint16_t)child_pos.x,
+                                                 (uint16_t)child_pos.y,
+                                                 (uint16_t)child_pos.z};
 						m_nodes[node_idx].depth = (uint8_t)(depth+1);
 					}
 				}
@@ -158,15 +162,21 @@ public:
 
 		m_dual_nodes.resize(node_counter);
 
-		tlog::success() << "Built TriangleOctree: depth=" << max_depth << " nodes=" << m_nodes.size() << " dual_nodes=" << m_dual_nodes.size() << ". Populating dual nodes...";
+        tlog::success() << "Built TriangleOctree: depth=" << max_depth
+                        << " nodes=" << m_nodes.size() << " dual_nodes="
+                        << m_dual_nodes.size() << ". Populating dual nodes...";
 
-		// TODO: find a fast lockfree hashmap implementation and parallelize the bottom for loop
+        // TODO: find a fast lockfree hashmap implementation and parallelize the
+        // bottom for loop.
 		std::unordered_map<u16vec4, uint32_t> coords;
 		coords.reserve(m_dual_nodes.size()*8);
 		m_n_vertices = 0;
-		auto generate_dual_coords = [&](TriangleOctreeDualNode& dual_node, int depth, const u16vec3 pos) {
+        auto generate_dual_coords = [&](TriangleOctreeDualNode& dual_node,
+                                        int depth,
+                                        const u16vec3 pos) {
 			for (uint32_t i = 0; i < 8; ++i) {
-				u16vec4 coord = {(uint16_t)pos.x, (uint16_t)pos.y, (uint16_t)pos.z, (uint16_t)depth};
+                u16vec4 coord = {(uint16_t)pos.x, (uint16_t)pos.y,
+                                 (uint16_t)pos.z, (uint16_t)depth};
 				if (i&1) ++coord.x;
 				if (i&2) ++coord.y;
 				if (i&4) ++coord.z;
@@ -193,7 +203,8 @@ public:
 				if (i&2) ++child_pos.y;
 				if (i&4) ++child_pos.z;
 
-				generate_dual_coords(m_dual_nodes[child_idx], node.depth+1, child_pos);
+                generate_dual_coords(m_dual_nodes[child_idx], node.depth + 1,
+                                     child_pos);
 			}
 		}
 
@@ -220,19 +231,22 @@ public:
 	}
 
 	template <typename F>
-	__device__ static uint8_t traverse(const TriangleOctreeNode* nodes, const TriangleOctreeDualNode* dual_nodes, int max_depth, vec3 pos, F fun) {
+    __device__ static uint8_t traverse(const TriangleOctreeNode* nodes,
+                                       const TriangleOctreeDualNode* dual_nodes,
+                                       int max_depth,
+                                       vec3 pos,
+                                       F fun) {
 		int node_idx = 0;
 
 		for (uint8_t depth = 0; true; ++depth) {
 			fun(dual_nodes[node_idx], depth, pos);
 
-			// Dual nodes are one layer deeper than regular nodes
-			if (depth >= max_depth-1) {
-				return depth+1;
+            // Dual nodes are one layer deeper than regular nodes.
+            if (depth >= max_depth - 1) {
+                return depth + 1;
 			}
 
-			// Traverse
-
+            // Traverse.
 			uint8_t child_in_node = 0;
 
 			NGP_PRAGMA_UNROLL
@@ -248,13 +262,15 @@ public:
 			node_idx = nodes[node_idx].children[child_in_node];
 
 			if (node_idx < 0) {
-				return depth+1;
+                return depth + 1;
 			}
 		}
 		return max_depth;
 	}
 
-	__device__ static bool contains(const TriangleOctreeNode* nodes, int max_depth, vec3 pos) {
+    __device__ static bool contains(const TriangleOctreeNode* nodes,
+                                    int max_depth,
+                                    vec3 pos) {
 		const TriangleOctreeNode* node = &nodes[0];
 
 		for (uint8_t depth = 0; depth < max_depth-1; ++depth) {
@@ -282,7 +298,10 @@ public:
 		return true;
 	}
 
-    __device__ static vec2 ray_intersect(const TriangleOctreeNode* nodes, int max_depth, const vec3& ro, const vec3& rd) {
+    __device__ static vec2 ray_intersect(const TriangleOctreeNode* nodes,
+                                         int max_depth,
+                                         const vec3& ro,
+                                         const vec3& rd) {
 		FixedStack<int, 64> query_stack;
 		query_stack.push(0);
 
@@ -291,7 +310,8 @@ public:
 		float mint = MAX_DIST;
         vec2 res = {MAX_DIST, MAX_DIST};
 
-		// Ensure that closer children are checked last such that they rise to the top of the stack
+        // Ensure that closer children are checked last such that they rise to
+        // the top of the stack.
 		uint8_t reorder_mask = 0;
 		if (rd.x > 0) reorder_mask |= 1;
 		if (rd.y > 0) reorder_mask |= 2;
@@ -319,7 +339,8 @@ public:
 
 				float size = scalbnf(1.0f, -depth);
 
-				BoundingBox bb = {size * vec3(pos), size * vec3(pos + u16vec3(1))};
+                BoundingBox bb = {size * vec3(pos),
+                                  size * vec3(pos + u16vec3(1))};
 				vec2 t = bb.ray_intersect(ro, rd);
 				if (t.y >= 0 && t.y < MAX_DIST && t.x < mint) {
 					// All children's children are gonna be leaves,

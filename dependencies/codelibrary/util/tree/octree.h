@@ -60,7 +60,32 @@ public:
             return bits::CountBits(location_) / 3;
         }
 
+        /**
+         * Return the location of this node in the octree.
+         */
+        void get_position(int* x, int* y, int* z, int* d) const {
+            CHECK(x && y && z && d);
+
+            *d = this->get_depth();
+            Index location = location_ & ((Index(1) << (3 * *d)) - 1);
+            *x = MortonDecode(location);
+            *y = MortonDecode(location >> 1);
+            *z = MortonDecode(location >> 2);
+        }
+
     protected:
+        /**
+         * 3D Morton decode.
+         */
+        static int MortonDecode(Index x) {
+            x = x & 0x49249249;
+            x = (x | (x >> 2)) & 0xc30c30c3;
+            x = (x | (x >> 4)) & 0x0f00f00f;
+            x = (x | (x >> 8)) & 0xff0000ff;
+            x = (x | (x >> 16)) & 0x0000ffff;
+            return x;
+        }
+
         /**
          * Return the i-th index child location.
          */
@@ -96,7 +121,7 @@ public:
      * Check if the given node is a leaf node.
      */
     bool is_leaf(const Node* node) const {
-        return node->get_depth() == depth_;
+        return node->get_depth() == depth_ - 1;
     }
 
     /**
@@ -279,7 +304,7 @@ protected:
     }
 
     /**
-     * Morton encode.
+     * 3D Morton encode.
      */
     static uint64_t MortonEncode(int x, int y, int z) {
         uint64_t answer = 0;
@@ -290,15 +315,13 @@ protected:
     /**
      * Insert a leaf node.
      *
-     * If the leaf node already exist, we change its value and return a 'false'
-     * label.
+     * If the leaf node already exist, we do nothing and return a 'false' label.
      */
     std::pair<Node*, bool> Insert(int x, int y, int z, const T& data,
                                   int depth_mask, Node* node) {
         if (depth_mask == 0) {
             // Root node.
-            node->data_ = data;
-            return {node, true};
+            return {node, false};
         }
 
         int index = GetChildIndex(x, y, z, depth_mask);
@@ -310,7 +333,6 @@ protected:
             }
 
             // Reach leaf.
-            child->data_ = data;
             return {child, false};
         } else {
             Node* child = Allocate(location);

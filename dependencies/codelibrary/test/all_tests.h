@@ -1,5 +1,5 @@
 //
-// Copyright 2015-2022 Yangbin Lin. All Rights Reserved.
+// Copyright 2015-2023 Yangbin Lin. All Rights Reserved.
 //
 // Author: yblin@jmu.edu.cn (Yangbin Lin)
 //
@@ -25,7 +25,6 @@
 #include "codelibrary/test/util/list/indexed_list_test.h"
 #include "codelibrary/test/util/tree/kd_tree_test.h"
 #include "codelibrary/test/util/tree/octree_test.h"
-#include "codelibrary/test/util/tree/quad_tree_test.h"
 #include "codelibrary/test/util/color/color_tests.h"
 
 #endif // CODELIBRARY_TEST_ALL_TESTS_H_

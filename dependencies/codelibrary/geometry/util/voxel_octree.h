@@ -9,12 +9,15 @@
 #ifndef CODELIBRARY_GEOMETRY_UTIL_VOXEL_OCTREE_3D_H_
 #define CODELIBRARY_GEOMETRY_UTIL_VOXEL_OCTREE_3D_H_
 
+#include <queue>
 #include <unordered_set>
 
 #include "codelibrary/base/clamp.h"
 #include "codelibrary/geometry/box_3d.h"
 #include "codelibrary/geometry/intersect_3d.h"
 #include "codelibrary/geometry/mesh/surface_mesh.h"
+#include "codelibrary/geometry/range_ray_3d.h"
+#include "codelibrary/geometry/ray_3d.h"
 #include "codelibrary/util/tree/octree.h"
 
 namespace cl {
@@ -25,11 +28,30 @@ namespace geometry {
  */
 template <typename T, typename Index>
 class VoxelOctree : public Octree<bool, Index> {
-public:    
+    static_assert(std::is_floating_point<T>::value, "");
+
+public:
+    using Node = typename Octree<bool, Index>::Node;
+
     VoxelOctree() = default;
 
     /**
-     * Reset MeshOctree to the given surface mesh, i.e., it voxelizes the given
+     * Clear the octree and reset it bounding box and depth.
+     */
+    void ResetBox(const Box3D<T>& box, int depth) {
+        CHECK(depth > 0);
+        CHECK(depth <= (std::numeric_limits<Index>::digits - 1) / 3);
+
+        box_ = box;
+        this->Reset(depth);
+
+        x_resolution_ = box_.x_length() / this->resolution_;
+        y_resolution_ = box_.y_length() / this->resolution_;
+        z_resolution_ = box_.z_length() / this->resolution_;
+    }
+
+    /**
+     * Reset VoxelOctree to the given surface mesh, i.e., it voxelizes the given
      * mesh.
      *
      * Paramters:
@@ -40,18 +62,9 @@ public:
     void ResetMesh(const SurfaceMesh<Point>& mesh, int depth) {
         static_assert(std::is_same<typename Point::value_type, T>::value, "");
 
-        CHECK(depth > 0);
-        CHECK(depth <= (std::numeric_limits<Index>::digits - 1) / 3);
-
-        box_ = mesh.GetBoundingBox();
-        this->Reset(depth);
-
-        x_resolution_ = box_.x_length() / this->resolution_;
-        y_resolution_ = box_.y_length() / this->resolution_;
-        z_resolution_ = box_.z_length() / this->resolution_;
+        this->ResetBox(mesh.GetBoundingBox(), depth);
 
         std::unordered_set<uint64_t> hash;
-
         for (auto face : mesh.faces()) {
             Triangle3D<T> triangle = face->GetTriangle();
             Box3D<T> box = triangle.bounding_box();
@@ -77,6 +90,21 @@ public:
                 }
             }
         }
+    }
+
+    /**
+     * Insert a voxel at point 'p'.
+     */
+    template <typename Point>
+    std::pair<Node*, bool> InsertVoxel(const Point& p) {
+        static_assert(std::is_same<typename Point::value_type, T>::value, "");
+
+        CHECK(x_resolution_ != 0);
+        CHECK(y_resolution_ != 0);
+        CHECK(z_resolution_ != 0);
+
+        return this->Insert(GetXIndex(p.x), GetYIndex(p.y), GetZIndex(p.z),
+                            true);
     }
 
     /**
@@ -110,19 +138,48 @@ public:
     }
 
     /**
-     * Get the voxel at index (i, j, k).
+     * Get the voxel at leaf node (i, j, k).
      */
     Box3D<T> GetVoxel(int i, int j, int k) const {
         CHECK(i >= 0 && i < this->resolution_);
         CHECK(j >= 0 && j < this->resolution_);
         CHECK(k >= 0 && k < this->resolution_);
 
-        return Box3D<T>(box_.x_min() + i * x_resolution_,
+        return Box3D<T>(box_.x_min() +  i      * x_resolution_,
                         box_.x_min() + (i + 1) * x_resolution_,
-                        box_.y_min() + j * y_resolution_,
+                        box_.y_min() +  j      * y_resolution_,
                         box_.y_min() + (j + 1) * y_resolution_,
-                        box_.z_min() + k * z_resolution_,
+                        box_.z_min() +  k      * z_resolution_,
                         box_.z_min() + (k + 1) * z_resolution_);
+    }
+
+    /**
+     * Get the voxel at node (i, j, k, d).
+     */
+    Box3D<T> GetVoxel(int i, int j, int k, int d) const {
+        CHECK(i >= 0 && i < this->resolution_);
+        CHECK(j >= 0 && j < this->resolution_);
+        CHECK(k >= 0 && k < this->resolution_);
+        CHECK(d >= 0 && d < this->depth_);
+
+        int scale = 1 << (this->depth_ - d - 1);
+        return Box3D<T>(box_.x_min() +  i      * scale * x_resolution_,
+                        box_.x_min() + (i + 1) * scale * x_resolution_,
+                        box_.y_min() +  j      * scale * y_resolution_,
+                        box_.y_min() + (j + 1) * scale * y_resolution_,
+                        box_.z_min() +  k      * scale * z_resolution_,
+                        box_.z_min() + (k + 1) * scale * z_resolution_);
+    }
+
+    /**
+     * Get the voxel of the given octree node.
+     */
+    Box3D<T> GetVoxel(const Node* node) const {
+        CHECK(node);
+
+        int x, y, z, d;
+        node->get_position(&x, &y, &z, &d);
+        return GetVoxel(x, y, z, d);
     }
 
     /**
@@ -138,12 +195,47 @@ public:
                           box_.z_min() + (k + 0.5) * z_resolution_);
     }
 
+    /**
+     * Pick all voxels intersected by the given ray.
+     */
+    void PickVoxels(const Ray3D<T>& ray, Array<Node*>* voxels) {
+        CHECK(voxels);
+
+        voxels->clear();
+
+        RangeRay3D<T> r(ray);
+        if (!r.Intersect(box_)) return;
+
+        std::queue<std::pair<Node*, RangeRay3D<T>>> rays;
+        rays.emplace(this->root_, r);
+
+        while (!rays.empty()) {
+            std::pair<Node*, RangeRay3D<T>> p = rays.front();
+            rays.pop();
+
+            if (this->is_leaf(p.first)) {
+                voxels->push_back(p.first);
+                continue;
+            }
+
+            for (int i = 0; i < 8; ++i) {
+                Node* child = this->GetChild(p.first, i);
+                if (!child) continue;
+
+                RangeRay3D<T> ray = p.second;
+                if (ray.Intersect(this->GetVoxel(child))) {
+                    rays.emplace(child, ray);
+                }
+            }
+        }
+    }
+
     const Box3D<T>& box() const {
         return box_;
     }
 
 private:
-    // Bounding box of the input mesh.
+    // Bounding box of the octree.
     Box3D<T> box_;
 
     // The X, Y, and Z lengh of the voxel.

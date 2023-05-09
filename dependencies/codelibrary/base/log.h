@@ -1,5 +1,5 @@
 ﻿//
-// Copyright 2016-2022 Yangbin Lin. All Rights Reserved.
+// Copyright 2016-2023 Yangbin Lin. All Rights Reserved.
 //
 // Author: yblin@jmu.edu.cn (Yangbin Lin)
 //
@@ -23,6 +23,7 @@
 #include <ctime>
 #include <memory>
 
+#include "codelibrary/base/ansi.h"
 #include "codelibrary/base/message.h"
 
 namespace cl {
@@ -36,7 +37,9 @@ namespace cl {
  *    LOG(INFO) << "This is test info log";
  */
 class Logger {
-    Logger() = default;
+    Logger() {
+        support_ansi_ = ansi::SupportAnsiEscapeCode();
+    }
 
 public:
     Logger(const Logger&) = delete;
@@ -169,20 +172,20 @@ private:
     /**
      * Convert severity to string.
      */
-    static const char* SeverityToString(Severity severity) {
+    const char* SeverityToString(Severity severity) const {
         switch (severity) {
         case LOG_FATAL:
-            return "F";
+            return support_ansi_ ? "\033[1;31mF" : "F";
         case LOG_WRONG:
-            return "E";
+            return support_ansi_ ? "\033[0;31mE" : "E";
         case LOG_WARNING:
-            return "W";
+            return support_ansi_ ? "\033[1;33mW" : "W";
         case LOG_INFO:
-            return "I";
+            return support_ansi_ ? "\033[0mI" : "I";
         case LOG_DEBUG:
-            return "D";
+            return support_ansi_ ? "\033[1;35mD" : "D";
         case LOG_VERBOSE:
-            return "V";
+            return support_ansi_ ? "\033[0mV" : "V";
         default:
             return "N";
         }
@@ -195,6 +198,9 @@ private:
      * those messages are dropped.
      */
     Severity severity_level_ = LOG_FATAL;
+
+    // Support ANSI or not.
+    bool support_ansi_ = false;
 };
 
 } // namespace cl
@@ -216,7 +222,7 @@ private:
     !(cl::Logger::GetInstance()->CheckSeverity(LOG_SEVERITY(severity))) ? \
         (void) 0 : (*cl::Logger::GetInstance()) += \
             cl::Logger::Record(LOG_SEVERITY(severity), __FILE__, __LINE__) += \
-            cl::Message() << cl::Message()
+            cl::Message() << ""
 
 #ifdef LOG_IF
 #undef LOG_IF

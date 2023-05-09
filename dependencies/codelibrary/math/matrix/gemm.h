@@ -37,29 +37,49 @@ void GEMM(int m, int n, int k, const T* a, const T* b, T* c) {
     CHECK(c != a && c != b);
 
     const int block_size = 128;
-    int ii, jj, pp;
     T sum;
 
     std::memset(c, 0, sizeof(T) * m * k);
-    for (int i = 0; i < m; i += block_size) {
-        for (int j = 0; j < n; j += block_size) {
-            for (int p = 0; p < k; p += block_size) {
-                int block_m = (i + block_size <= m) ? block_size : (m - i);
-                int block_n = (j + block_size <= n) ? block_size : (n - j);
-                int block_k = (p + block_size <= k) ? block_size : (k - p);
-                for (ii = i; ii < i + block_m; ii++) {
-                    for (jj = j; jj < j + block_n; jj++) {
-                        sum = 0.0;
-                        for (pp = p; pp + 4 < p + block_k; pp += 4) {
-                            sum += a[ii * k + pp] * b[pp * n + jj];
-                            sum += a[ii * k + pp + 1] * b[(pp + 1) * n + jj];
-                            sum += a[ii * k + pp + 2] * b[(pp + 2) * n + jj];
-                            sum += a[ii * k + pp + 3] * b[(pp + 3) * n + jj];
+    if (m <= block_size && n <= block_size && k <= block_size) {
+        int p;
+        for (int i = 0; i < m; ++i) {
+            for (int j = 0; j < k; ++j) {
+                sum = T(0);
+                for (p = 0; p + 4 < n; p += 4) {
+                    sum += a[i * n + p]     * b[ p      * k + j];
+                    sum += a[i * n + p + 1] * b[(p + 1) * k + j];
+                    sum += a[i * n + p + 2] * b[(p + 2) * k + j];
+                    sum += a[i * n + p + 3] * b[(p + 3) * k + j];
+                }
+                for (; p < n; ++p) {
+                    sum += a[i * n + p] * b[p * k + j];
+                }
+                c[i * k + j] += sum;
+            }
+        }
+    } else {
+        int i, j, p, block_m, block_n, block_k;
+        #pragma omp parallel for private(sum)
+        for (int ii = 0; ii < m; ii += block_size) {
+            for (int jj = 0; jj < k; jj += block_size) {
+                for (int pp = 0; pp < n; pp += block_size) {
+                    block_m = (ii + block_size <= m) ? block_size : (m - ii);
+                    block_n = (pp + block_size <= n) ? block_size : (n - pp);
+                    block_k = (jj + block_size <= k) ? block_size : (k - jj);
+                    for (i = ii; i < ii + block_m; ++i) {
+                        for (j = jj; j < jj + block_k; ++j) {
+                            sum = T(0);
+                            for (p = pp; p + 4 < pp + block_n; p += 4) {
+                                sum += a[i * n + p]     * b[ p      * k + j];
+                                sum += a[i * n + p + 1] * b[(p + 1) * k + j];
+                                sum += a[i * n + p + 2] * b[(p + 2) * k + j];
+                                sum += a[i * n + p + 3] * b[(p + 3) * k + j];
+                            }
+                            for (; p < pp + block_n; ++p) {
+                                sum += a[i * n + p] * b[p * k + j];
+                            }
+                            c[i * k + j] += sum;
                         }
-                        for (; pp < p + block_k; ++pp) {
-                            sum += a[ii * k + pp] * b[pp * n + jj];
-                        }
-                        c[ii * n + jj] += sum;
                     }
                 }
             }

@@ -23,34 +23,19 @@ namespace cuda {
  * Performance (test on GPU 3090, CPU I9 3070HZ)
  *
  * --------------------------------------------------
- * Matrix and vector multiplication
+ * Matrix and matrix multiplication (float)
  * --------------------------------------------------
- * N     GPUMatrix   Matrix (CPU)   Eigen (CPU)
- * 4     19us        24ns           190ns
- * 16    16us        88ns           479ns
- * 32    22us        274ns          14us
- * 64    35us        1us            52us
- * 128   9us         4us            186us
- * 256   10us        18us           546us
- * 512   13us        94us           77us
- * 1024  23us        305us          10ms
- * 2048  223us       1ms            26ms
- * 4096  203us       7ms            203ms
- *
- * --------------------------------------------------
- * Matrix and matrix multiplication
- * --------------------------------------------------
- * N     GPUMatrix   Matrix (CPU)   Eigen (CPU)
- * 4     19us        77ns           51ns
- * 16    23us        1us            709ns
- * 32    22us        17us           4us
- * 64    34us        142us          30us
- * 128   59us        1ms            231us
- * 256   160us       12ms           1ms
- * 512   824us       152ms          14ms
- * 1024  5ms         1.2s           107ms
- * 2048  38ms        9.9s           885ms
- * 4096  281ms       1.3min         7s
+ * N     GPUMatrix   Eigen (CPU)   Matrix (CPU)
+ * 4     12us        35ns          72ns
+ * 16    10us        364ns         2us
+ * 32    12us        2us           17us
+ * 64    14us        15us          138us
+ * 128   16us        117us         1ms
+ * 256   19us        965us         11ms
+ * 512   34us        7ms           103ms
+ * 1024  306us       54ms          1.3s
+ * 2048  1ms         429ms         10s
+ * 4096  7ms         3.5s          1.4min
  */
 template <class T>
 class GPUMatrix {
@@ -93,8 +78,9 @@ public:
      * Assign GPUMatrix from host data.
      */
     GPUMatrix(int n_rows, int n_columns, const Array<T>& data)
-        : n_rows_(n_rows), n_columns_(n_columns), memory_(data) {
+        : n_rows_(n_rows), n_columns_(n_columns), memory_(data.size()) {
         CHECK(n_rows_ * n_columns_ == data.size());
+        memory_.CopyFromHost(data.data(), data.size());
     }
 
     /**

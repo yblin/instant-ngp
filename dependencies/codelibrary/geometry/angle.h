@@ -20,6 +20,7 @@
 #include <type_traits>
 
 #include "codelibrary/base/clamp.h"
+#include "codelibrary/geometry/point_2d.h"
 #include "codelibrary/geometry/vector_2d.h"
 #include "codelibrary/geometry/vector_3d.h"
 #include "codelibrary/geometry/vector_4d.h"
@@ -61,34 +62,6 @@ T Radian(const Vector2D<T>& v) {
 }
 
 /**
- * Robust compute the radian angle of 2D vector (x2 - x1, y2 - y1).
- *
- * The return value is in the range: [0, 2 * PI).
- */
-template <typename T>
-T Radian(T x1, T y1, T x2, T y2) {
-    static_assert(std::is_floating_point<T>::value, "");
-
-    ExactFloat a(x1), b(y1), c(x2), d(y2);
-    c -= a;
-    d -= b;
-
-    if (c.sign() == 0) {
-        if (d.sign() == 0) return std::numeric_limits<T>::quiet_NaN();
-        return d.sign() > 0 ? M_PI : 1.5 * M_PI;
-    }
-
-    int sign = c.sign() * d.sign();
-    if (sign == 0) return 0;
-
-    double v = static_cast<double>(d.significand().ToUInt64()) /
-               static_cast<double>(c.significand().ToUInt64()) *
-               std::pow(2.0, d.exponent() - c.exponent());
-    double angle = std::atan(v);
-    return sign > 0 ? angle : M_PI + M_PI - angle;
-}
-
-/**
  * Get the degree angle of 2D vector.
  *
  * The return value is in the range: [0, 360).
@@ -126,6 +99,34 @@ auto Radian(const Vector& v1, const Vector& v2) {
     T t1 = ((a - b) + c) * u;
     T t2 = ((b + c) + a) * ((a - c) + b);
     return T(2) * std::atan(std::sqrt(t1 / t2));
+}
+
+/**
+ * Robust compute the radian angle of a 2D vector (p2 - p1).
+ *
+ * The return value is in the range: [0, 2 * PI).
+ */
+template <typename T>
+T RobustRadian(const Point2D<T>& p1, const Point2D<T>& p2) {
+    static_assert(std::is_floating_point<T>::value, "");
+
+    ExactFloat a(p1.x), b(p1.y), c(p2.x), d(p2.y);
+    c -= a;
+    d -= b;
+
+    if (c.sign() == 0) {
+        if (d.sign() == 0) return std::numeric_limits<T>::quiet_NaN();
+        return d.sign() > 0 ? M_PI : 1.5 * M_PI;
+    }
+
+    int sign = c.sign() * d.sign();
+    if (sign == 0) return 0;
+
+    double v = static_cast<double>(d.significand().ToUInt64()) /
+               static_cast<double>(c.significand().ToUInt64()) *
+               std::pow(2.0, d.exponent() - c.exponent());
+    double angle = std::atan(v);
+    return sign > 0 ? angle : M_PI + M_PI - angle;
 }
 
 } // namespace cl

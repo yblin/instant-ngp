@@ -1,5 +1,5 @@
 //
-// Copyright 2014-2022 Yangbin Lin. All Rights Reserved.
+// Copyright 2014-2023 Yangbin Lin. All Rights Reserved.
 //
 // Author: yblin@jmu.edu.cn (Yangbin Lin)
 //
@@ -17,6 +17,7 @@
 #include <map>
 #include <string>
 
+#include "codelibrary/base/ansi.h"
 #include "codelibrary/base/array.h"
 #include "codelibrary/base/equal.h"
 #include "codelibrary/base/message.h"
@@ -194,7 +195,9 @@ private:
 
 private:
     // Prevent users define their own TestProgram.
-    TestProgram() = default;
+    TestProgram() {
+        support_ansi_ = ansi::SupportAnsiEscapeCode();
+    }
 
 public:
     /**
@@ -516,7 +519,11 @@ private:
      * Print information before the test starts.
      */
     void PrintOnTestStart(TestInfo* test_info) const {
-        printf("[ RUN      ] ");
+        if (support_ansi_) {
+            printf("[ \033[0;32mRUN\033[0m      ] ");
+        } else {
+            printf("[ RUN      ] ");
+        }
         PrintTestName(test_info->test_case_name, test_info->name);
         printf("\n");
         fflush(stdout);
@@ -530,11 +537,19 @@ private:
         if (result.success) return;
 
         printf("[          ]\n");
-        printf("[ FAILURE  ] At ");
+        if (support_ansi_) {
+            printf("[ \033[0;31mFAILURE\033[0m  ] At ");
+        } else {
+            printf("[ FAILURE  ] At ");
+        }
         printf("%s(%d)\n", result.file_name.c_str(), result.line_number);
 
         // Print failure message.
-        printf("\n%s\n\n", result.message.c_str());
+        if (support_ansi_) {
+            printf("\n\033[0;36m%s\033[0m\n\n", result.message.c_str());
+        } else {
+            printf("\n%s\n\n", result.message.c_str());
+        }
 
         fflush(stdout);
     }
@@ -543,7 +558,11 @@ private:
      * Print information after the test successes.
      */
     void PrintOnTestSuccessed(TestInfo* test_info, int64_t test_time) const {
-        printf("[       OK ] ");
+        if (support_ansi_) {
+            printf("[       \033[0;32mOK\033[0m ] ");
+        } else {
+            printf("[       OK ] ");
+        }
         PrintTestName(test_info->test_case_name, test_info->name);
         printf(" (%" PRIu64 " ms)\n", test_time);
 
@@ -554,7 +573,7 @@ private:
      * Print information after the test failed.
      */
     void PrintOnTestFailed(TestInfo* test_info, int64_t test_time) const {
-        printf("[  FAILED  ] ");
+        PrintFailed();
         PrintTestName(test_info->test_case_name, test_info->name);
         printf(" (%" PRIu64 " ms)\n", test_time);
 
@@ -582,21 +601,26 @@ private:
                PrintTestCount(result_.total_test_count).c_str(),
                PrintTestCaseCount(result_.total_test_case_count).c_str());
         printf(" (%" PRIu64 " ms total)\n", result_.elapsed_time);
-        printf("[  PASSED  ] ");
+        if (support_ansi_) {
+            printf("[  \033[0;34mPASSED\033[0m  ] ");
+        } else {
+            printf("[  PASSED  ] ");
+        }
         printf("%s.\n", PrintTestCount(result_.successful_test_count).c_str());
 
         if (result_.failed_test_count > 0) {
-            printf("[  FAILED  ] ");
+            PrintFailed();
             printf("%s, listed below:\n",
                    PrintTestCount(result_.failed_test_count).c_str());
 
             for (TestInfo* test_info : result_.failed_tests) {
-                printf("[  FAILED  ] ");
+                PrintFailed();
                 PrintTestName(test_info->test_case_name, test_info->name);
                 printf("\n");
             }
 
-            printf("\n%2d FAILED %s\n", result_.failed_test_count,
+            printf("\n\033[0;31m%2d FAILED %s\033[0m\n",
+                   result_.failed_test_count,
                    result_.failed_test_count == 1 ? "TEST" : "TESTS");
         }
         fflush(stdout);
@@ -639,6 +663,18 @@ private:
         return PrintCountableNoun(test_case_count, "test case", "test cases");
     }
 
+    /**
+     * Print [  FAILED  ].
+     */
+    void PrintFailed() const {
+        if (support_ansi_) {
+            printf("[  \033[0;31mFAILED\033[0m  ] ");
+
+        } else {
+            printf("[  FAILED  ] ");
+        }
+    }
+
     // The number of test cases.
     int n_test_cases_ = 0;
 
@@ -653,6 +689,9 @@ private:
 
     // The test program result.
     Result result_;
+
+    // Support ANSI color code or not.
+    bool support_ansi_ = false;
 };
 
 } // namespace cl

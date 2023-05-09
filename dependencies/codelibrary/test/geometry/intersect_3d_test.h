@@ -20,13 +20,17 @@ TEST(Intersect3DTest, PlaneLineIntersection) {
     RLine3D line(cl::RPoint3D(1.0, 2.0, 3.0), cl::RPoint3D(4.0, 5.0, 6.0));
     RPoint3D p;
     ASSERT(cl::geometry::Cross(plane, line, &p));
-    ASSERT_EQ(p, cl::RPoint3D(0.0, 1.0, 2.0));
+    ASSERT_EQ_NEAR(p.x, 0.0, 1e-12);
+    ASSERT_EQ_NEAR(p.y, 1.0, 1e-12);
+    ASSERT_EQ_NEAR(p.z, 2.0, 1e-12);
 
     RPlane3D plane1(RPoint3D(1.0, 1.0, 1.0), RVector3D(1.0, 0.0, 1.0));
     RLine3D line1(cl::RPoint3D(1.0, 2.0, 3.0), cl::RPoint3D(4.0, 5.0, 6.0));
     RPoint3D p1;
     ASSERT(cl::geometry::Cross(plane1, line1, &p1));
-    ASSERT_EQ(p1, cl::RPoint3D(0.0, 1.0, 2.0));
+    ASSERT_EQ_NEAR(p1.x, 0.0, 1e-12);
+    ASSERT_EQ_NEAR(p1.y, 1.0, 1e-12);
+    ASSERT_EQ_NEAR(p1.z, 2.0, 1e-12);
 
     RPlane3D plane2(RPoint3D(1.0, 2.0, 3.0), RVector3D(1.0, 1.0, 1.0));
     RLine3D line2(cl::RPoint3D(1.0, 2.0, 3.0), cl::RPoint3D(4.0, 5.0, 6.0));

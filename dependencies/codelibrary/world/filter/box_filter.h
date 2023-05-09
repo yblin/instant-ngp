@@ -31,11 +31,11 @@ Shader* HorizentalBoxFilter() {
 
         void main() {
             vec2 offset_x = vec2(1.0 / textureSize(image, 0).x, 0.0);
-            out_color.rgb = vec3(0);
+            out_color = vec4(0);
             for (int i = -kernel_radius; i <= kernel_radius; ++i) {
-                out_color.rgb += texture(image, frag_uv + i * offset_x).rgb;
+                out_color += texture(image, frag_uv + i * offset_x);
             }
-            out_color.rgb /= (2.0 * kernel_radius + 1.0);
+            out_color /= (2.0 * kernel_radius + 1.0);
         }
     );
 
@@ -61,11 +61,11 @@ Shader* VerticalBoxFilter() {
 
         void main() {
             vec2 offset_y = vec2(0.0, 1.0 / textureSize(image, 0).y);
-            out_color.rgb = vec3(0);
+            out_color = vec4(0);
             for (int i = -kernel_radius; i <= kernel_radius; ++i) {
-                out_color.rgb += texture(image, frag_uv + i * offset_y).rgb;
+                out_color += texture(image, frag_uv + i * offset_y);
             }
-            out_color.rgb /= (2.0 * kernel_radius + 1.0);
+            out_color /= (2.0 * kernel_radius + 1.0);
         }
     );
 

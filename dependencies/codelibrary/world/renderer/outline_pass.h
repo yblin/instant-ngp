@@ -41,13 +41,11 @@ public:
         glDisable(GL_DEPTH_TEST);
 
         shader_->Use();
-        shader_->SetUniform("clip_to_view",
-                                    camera.projection().Inverse());
+        shader_->SetUniform("clip_to_view", camera.projection().Inverse());
         shader_->SetUniform("depth_threshold", depth_threshold_);
-        shader_->SetUniform("depth_normal_threshold",
-                                    depth_normal_threshold_);
+        shader_->SetUniform("depth_normal_threshold", depth_normal_threshold_);
         shader_->SetUniform("depth_normal_threshold_scale",
-                                    depth_normal_threshold_scale_);
+                            depth_normal_threshold_scale_);
         shader_->SetUniform("normal_threshold", normal_threshold_);
         shader_->SetUniform("outline_width", outline_width_);
         shader_->SetUniform("outline_color", outline_color_);
