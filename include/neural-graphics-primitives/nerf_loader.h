@@ -24,7 +24,8 @@
 
 NGP_NAMESPACE_BEGIN
 
-// how much to scale the scene by vs the original nerf dataset; we want to fit the thing in the unit cube
+// How much to scale the scene by vs the original nerf dataset; we want to fit
+// the thing in the unit cube.
 static constexpr float NERF_SCALE = 0.33f;
 
 struct TrainingImageMetadata {
