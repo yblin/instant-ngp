@@ -1,13 +1,15 @@
 //
-// Copyright 2022 Yangbin Lin. All Rights Reserved.
+// Copyright 2022-2023 Yangbin Lin. All Rights Reserved.
 //
 // Author: yblin@jmu.edu.cn (Yangbin Lin)
 //
 // This file is part of the Code Library.
 //
 
-#ifndef CODELIBRARY_GEOMETRY_SNAPPER_2D_H_
-#define CODELIBRARY_GEOMETRY_SNAPPER_2D_H_
+#ifndef CODELIBRARY_GEOMETRY_SNAP_2D_H_
+#define CODELIBRARY_GEOMETRY_SNAP_2D_H_
+
+#include <cfloat>
 
 #include "codelibrary/base/array_nd.h"
 #include "codelibrary/base/clamp.h"
@@ -23,19 +25,19 @@ namespace geometry {
  * 2D snap system.
  */
 template <typename T>
-class Snapper2D {
+class Snap2D {
     static_assert(std::is_floating_point<T>::value, "");
 
     using Point = Point2D<T>;
 
 public:
-    Snapper2D(double threshold)
+    explicit Snap2D(double threshold)
         : threshold_(threshold) {
         CHECK(threshold_ >= 0.0);
     }
 
     /**
-     * Reset Snapper2D with the bounding box and the dimension of the grids.
+     * Reset Snap2D with the bounding box and the dimension of the grids.
      */
     void Reset(const Box2D<T>& box, int n_x_grids, int n_y_grids) {
         CHECK(!box.empty());
@@ -51,7 +53,7 @@ public:
     }
 
     /**
-     * Reset Snapper2D with the given incident points.
+     * Reset Snap2D with the given incident points.
      */
     void Reset(const Array<Point>& points) {
         CHECK(!points.empty());
@@ -61,12 +63,9 @@ public:
 
         int n1 = sqrt_n, n2 = sqrt_n;
         if (threshold_ > 0.0) {
-            n1 = static_cast<int>(std::min(box_.x_length() / threshold_,
-                                           sqrt_n));
-            n2 = static_cast<int>(std::min(box_.y_length() / threshold_,
-                                           sqrt_n));
+            n1 = Clamp(double(n1), 1.0, box_.x_length() / threshold_);
+            n2 = Clamp(double(n2), 1.0, box_.y_length() / threshold_);
         }
-        CHECK(n1 > 0 && n2 > 0);
 
         x_resolution_ = box_.x_length() / n1;
         y_resolution_ = box_.y_length() / n2;
@@ -93,8 +92,18 @@ public:
 
         Point res;
         double dis = DBL_MAX;
-        for (int x1 = -1; x1 <= 1; ++x1) {
-            for (int y1 = -1; y1 <= 1; ++y1) {
+        if (threshold_ == 0.0) {
+            for (const Point& q : grid_(g_x, g_y)) {
+                if (q == p) return q;
+            }
+            grid_(g_x, g_y).push_back(p);
+            return p;
+        }
+
+        int l = GetXIndex(p.x - threshold_), r = GetXIndex(p.x + threshold_);
+        int b = GetYIndex(p.y - threshold_), t = GetYIndex(p.y + threshold_);
+        for (int x1 = l; x1 <= r; ++x1) {
+            for (int y1 = b; y1 <= t; ++y1) {
                 int x2 = x1 + g_x, y2 = y1 + g_y;
                 if (x2 < 0 || x2 >= n1 || y2 < 0 || y2 >= n2) continue;
 
@@ -116,10 +125,10 @@ public:
 
     /**
      * Find a snap vertex whose distance to 'p' is not greater than threshold.
-     * If there are many candidate snap vertices, store the nearest one.
+     * If there are many candidate snap vertices, return the nearest one.
      *
-     * It returns false if no vertex in snapper has a distance to 'p' smaller
-     * than threshold.
+     * It returns false if no vertex in snap has a distance to 'p' smaller than
+     * threshold.
      */
     bool FindSnapVertex(const Point& p, Point* snap_v) const {
         CHECK(!grid_.empty());
@@ -128,9 +137,18 @@ public:
         int n1 = grid_.shape(0), n2 = grid_.shape(1);
         int g_x = GetXIndex(p.x), g_y = GetYIndex(p.y);
 
+        if (threshold_ == 0.0) {
+            for (const Point& q : grid_(g_x, g_y)) {
+                if (q == p) return true;
+            }
+            return false;
+        }
+
+        int l = GetXIndex(p.x - threshold_), r = GetXIndex(p.x + threshold_);
+        int b = GetYIndex(p.y - threshold_), t = GetYIndex(p.y + threshold_);
         double dis = DBL_MAX;
-        for (int x1 = -1; x1 <= 1; ++x1) {
-            for (int y1 = -1; y1 <= 1; ++y1) {
+        for (int x1 = l; x1 <= r; ++x1) {
+            for (int y1 = b; y1 <= t; ++y1) {
                 int x2 = x1 + g_x, y2 = y1 + g_y;
                 if (x2 < 0 || x2 >= n1 || y2 < 0 || y2 >= n2) continue;
 
@@ -174,6 +192,27 @@ public:
     }
 
     /**
+     * Return true if at least one point inside box.
+     */
+    bool ContainSnapVertex(const Box2D<T>& box) const {
+        int x_min = GetXIndex(box.x_min());
+        int x_max = GetXIndex(box.x_max());
+        int y_min = GetYIndex(box.y_min());
+        int y_max = GetYIndex(box.y_max());
+
+        for (int x = x_min; x <= x_max; ++x) {
+            for (int y = y_min; y <= y_max; ++y) {
+                for (const Point& p : grid_(x, y)) {
+                    if (Intersect(box, p)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
      * Given a line segment (p, q), find the snapped polyline.
      */
     void FindSnapSegment(const Point& p, const Point& q, Array<Point>* line) {
@@ -199,7 +238,7 @@ public:
     }
 
     /**
-     * Get all snap points in the Snapper2D.
+     * Get all snap points in the Snap2D.
      *
      * It is guaranteed that the distance between any pair of points is greater
      * than the set threshold.
@@ -254,4 +293,4 @@ private:
 } // namespace geometry
 } // namespace cl
 
-#endif // CODELIBRARY_GEOMETRY_SNAPPER_2D_H_
+#endif // CODELIBRARY_GEOMETRY_SNAP_2D_H_

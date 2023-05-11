@@ -13,7 +13,7 @@
 
 #include "codelibrary/geometry/distance_2d.h"
 #include "codelibrary/geometry/generator_2d.h"
-#include "codelibrary/geometry/util/snapper_2d.h"
+#include "codelibrary/geometry/util/snap_2d.h"
 
 namespace cl {
 namespace geometry {
@@ -31,9 +31,9 @@ void PoissonDiskSample2D(const Array<Point2D<T>>& points, double resolution,
     CHECK(resolution >= 0.0);
     CHECK(samples);
 
-    Snapper2D<T> snapper(resolution);
-    snapper.Reset(points);
-    snapper.GetSnapPoints(samples);
+    Snap2D<T> snap(resolution);
+    snap.Reset(points);
+    snap.GetSnapPoints(samples);
 }
 
 /**
@@ -60,8 +60,8 @@ void PoissonDiskSample2D(const Box2D<T>& box, double resolution,
     CHECK(y > 0.0);
     CHECK(x * y < INT_MAX);
 
-    Snapper2D<T> snapper(resolution);
-    snapper.Reset(box, static_cast<int>(x + 0.5), static_cast<int>(y + 0.5));
+    Snap2D<T> snap(resolution);
+    snap.Reset(box, static_cast<int>(x + 0.5), static_cast<int>(y + 0.5));
 
     RandomPointInBox2D<T> ran(box);
 
@@ -84,9 +84,9 @@ void PoissonDiskSample2D(const Box2D<T>& box, double resolution,
             if (!Intersect(q, box)) continue;
 
             Point2D<T> v;
-            if (!snapper.FindSnapVertex(q, &v)) {
+            if (!snap.FindSnapVertex(q, &v)) {
                 active_list.push(q);
-                snapper.InsertSnapVertex(q);
+                snap.InsertSnapVertex(q);
                 points->push_back(q);
             }
         }

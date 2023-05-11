@@ -1,13 +1,13 @@
 ﻿//
-// Copyright 2012-2022 Yangbin Lin. All Rights Reserved.
+// Copyright 2012-2023 Yangbin Lin. All Rights Reserved.
 //
 // Author: yblin@jmu.edu.cn (Yangbin Lin)
 //
 // This file is part of the Code Library.
 //
 
-#ifndef CODELIBRARY_GEOMETRY_UTIL_POLYGON_CONVEX_PARTITION_2D_H_
-#define CODELIBRARY_GEOMETRY_UTIL_POLYGON_CONVEX_PARTITION_2D_H_
+#ifndef CODELIBRARY_GEOMETRY_MESH_POLYGON_CONVEX_PARTITION_2D_H_
+#define CODELIBRARY_GEOMETRY_MESH_POLYGON_CONVEX_PARTITION_2D_H_
 
 #include <queue>
 
@@ -72,4 +72,4 @@ void PolygonConvexPartition2D(const MultiPolygon2D<T>& polygon,
 } // namespace geometry
 } // namespace cl
 
-#endif // CODELIBRARY_GEOMETRY_UTIL_POLYGON_CONVEX_PARTITION_2D_H_
+#endif // CODELIBRARY_GEOMETRY_MESH_POLYGON_CONVEX_PARTITION_2D_H_

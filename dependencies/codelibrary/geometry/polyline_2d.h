@@ -1,5 +1,5 @@
 //
-// Copyright 2022 Yangbin Lin. All Rights Reserved.
+// Copyright 2022-2023 Yangbin Lin. All Rights Reserved.
 //
 // Author: yblin@jmu.edu.cn (Yangbin Lin)
 //
@@ -42,7 +42,7 @@ public:
     }
 
     /**
-     * Equal to Array's emplace back.
+     * Equal to Array's emplace_back().
      */
     template <typename... Args>
     void emplace_back(Args&&... args) {

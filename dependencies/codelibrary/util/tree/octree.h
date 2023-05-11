@@ -315,7 +315,8 @@ protected:
     /**
      * Insert a leaf node.
      *
-     * If the leaf node already exist, we do nothing and return a 'false' label.
+     * If the leaf node already exist, we do nothing and return a 'false'
+     * label.
      */
     std::pair<Node*, bool> Insert(int x, int y, int z, const T& data,
                                   int depth_mask, Node* node) {

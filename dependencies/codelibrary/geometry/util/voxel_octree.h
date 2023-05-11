@@ -103,8 +103,7 @@ public:
         CHECK(y_resolution_ != 0);
         CHECK(z_resolution_ != 0);
 
-        return this->Insert(GetXIndex(p.x), GetYIndex(p.y), GetZIndex(p.z),
-                            true);
+        return Insert(GetXIndex(p.x), GetYIndex(p.y), GetZIndex(p.z), true);
     }
 
     /**

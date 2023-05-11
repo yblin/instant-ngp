@@ -15,7 +15,7 @@
 #include "codelibrary/geometry/multi_polygon_2d.h"
 #include "codelibrary/geometry/topology/arrangement_2d.h"
 #include "codelibrary/geometry/topology/halfedge_graph.h"
-#include "codelibrary/geometry/util/snapper_2d.h"
+#include "codelibrary/geometry/util/snap_2d.h"
 #include "codelibrary/util/set/disjoint_set.h"
 
 namespace cl {
@@ -30,7 +30,7 @@ namespace geometry {
  * polygons. Otherwise in some cases the inner contour may exceed the outer
  * contour causing topology errors.
  *
- * This class depends on Arrangment2D and Snapper2D.
+ * This class depends on Arrangment2D and Snap2D.
  */
 template <typename T>
 class PolygonUnion2D {
@@ -211,10 +211,10 @@ protected:
 
         if (points.empty()) return;
 
-        Snapper2D<T> snapper(threshold);
-        snapper.Reset(points);
+        Snap2D<T> snap(threshold);
+        snap.Reset(points);
         arrangement->set_threshold(threshold);
-        snapper.GetSnapPoints(&points);
+        snap.GetSnapPoints(&points);
         arrangement->Reset(points);
 
         Array<Point> polyline;
@@ -223,13 +223,13 @@ protected:
             for (const auto& b : poly.boundaries()) {
                 for (int j = 0; j < b.polygon.size(); ++j) {
                     if (b.is_outer != b.polygon.IsClockwise()) {
-                        snapper.FindSnapSegment(b.polygon.vertex(j),
-                                                b.polygon.next_vertex(j),
-                                                &polyline);
+                        snap.FindSnapSegment(b.polygon.vertex(j),
+                                             b.polygon.next_vertex(j),
+                                             &polyline);
                     } else {
-                        snapper.FindSnapSegment(b.polygon.next_vertex(j),
-                                                b.polygon.vertex(j),
-                                                &polyline);
+                        snap.FindSnapSegment(b.polygon.next_vertex(j),
+                                             b.polygon.vertex(j),
+                                             &polyline);
                     }
                     if (polyline.size() < 2) continue;
 
